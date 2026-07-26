@@ -1,110 +1,209 @@
+import { useState } from 'react'
 import {
-  ResponsiveContainer, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
 } from 'recharts'
 
-const AXIS_STYLE = { fontSize: 11, fill: '#F7EFD9', fontFamily: 'Inter, sans-serif' }
+const COLORS = {
+  earth: '#16110D',
+  soil: '#1F1813',
+  soil2: '#2A2017',
+  border: '#4F3A2A',
+  linen: '#F7EFD9',
+  muted: '#8E7A63',
+  wheat: '#C79B41',
+  crop: '#5A7F3D',
+  accent: '#D96C2B',
+  moss: '#7B8E4A',
+}
+
+const AXIS_STYLE = { fontSize: 11, fill: COLORS.earth, fontFamily: 'Inter, sans-serif' }
 const TOOLTIP_STYLE = {
-  background: '#1F1813', border: '1px solid #4F3A2A', borderRadius: 12,
-  fontFamily: 'Inter, sans-serif', fontSize: 12, color: '#F7EFD9',
+  background: COLORS.soil,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 8,
+  color: COLORS.linen,
+  fontFamily: 'Inter, sans-serif',
+  fontSize: 13,
 }
 
-function humanizeLabel(value) {
-  return String(value)
+function humanizeName(value) {
+  return String(value || '')
     .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b[a-z]/g, (char) => char.toUpperCase())
 }
 
-function buildInsight(col) {
-  if (col.type === 'numeric') {
-    const average = col.avg?.toFixed?.(1) ?? '—'
-    return `Most values sit around ${average}, with the range stretching from ${col.min} to ${col.max}.`
-  }
-  if (col.type === 'categorical') {
-    const top = col.top_values?.[0]?.value || 'the main category'
-    return `The most common entry is ${top}, which stands out from the rest.`
-  }
-  if (col.type === 'temporal') {
-    const latest = col.trend?.[col.trend.length - 1]?.count ?? '—'
-    return `The recent trend points to ${latest} records in the latest period, so the pattern is easy to follow.`
-  }
-  return 'This field is useful for a quick scan of the current record set.'
+function formatNumber(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return String(value ?? 'not recorded')
+  return number.toLocaleString(undefined, { maximumFractionDigits: Math.abs(number) >= 10 ? 0 : 2 })
 }
 
-function ChartCard({ title, insight, children }) {
+function trimLabel(value, max = 18) {
+  const label = String(value ?? 'not recorded')
+  return label.length > max ? `${label.slice(0, max - 1)}...` : label
+}
+
+function buildCaption(column) {
+  if (column.type === 'numeric') {
+    if (!column.histogram?.length) return `${humanizeName(column.name)} has too few recorded values for a clear spread.`
+    return `Average ${humanizeName(column.name).toLowerCase()} is ${formatNumber(column.avg)}, ranging from ${formatNumber(column.min)} to ${formatNumber(column.max)}.`
+  }
+
+  if (column.type === 'categorical') {
+    const top = column.top_values?.[0]
+    if (!top) return `${humanizeName(column.name)} has no repeated values in this view.`
+    return `${top.value} appears most often for ${humanizeName(column.name).toLowerCase()}, with ${formatNumber(top.count)} records.`
+  }
+
+  if (column.type === 'temporal') {
+    const largest = [...(column.trend || [])].sort((a, b) => b.count - a.count)[0]
+    if (!largest) return `${humanizeName(column.name)} has no dated records in this view.`
+    return `${largest.period} has the strongest record count, with ${formatNumber(largest.count)} entries.`
+  }
+
+  return `${humanizeName(column.name)} is included in the live table.`
+}
+
+function ChartCard({ title, caption, detail, children }) {
   return (
-    <div className="rounded-[26px] border border-border/70 bg-soil/80 p-4 shadow-soft">
-      <div className="mb-3">
-        <div className="text-lg font-semibold text-linen">{title}</div>
-        <p className="mt-1 text-sm leading-6 text-linen/75">{insight}</p>
+    <article className="rounded-lg border border-border/25 bg-linen px-4 py-4 shadow-soft">
+      <header className="mb-3">
+        <h3 className="text-lg font-semibold text-earth">{title}</h3>
+        <p className="mt-1 text-sm leading-6 text-earth/70">{caption}</p>
+      </header>
+      <div className="h-60">{children}</div>
+      <div className="mt-3 min-h-10 border-t border-border/20 pt-3 text-sm leading-5 text-earth" aria-live="polite">
+        {detail ? (
+          <span>
+            <span className="font-semibold text-crop">{detail.label}</span>
+            <span className="text-earth/70">: {detail.value}</span>
+          </span>
+        ) : null}
       </div>
-      <div className="h-52">{children}</div>
-    </div>
+    </article>
   )
 }
 
-export default function ChartGrid({ columns }) {
+function NumericChart({ column }) {
+  const [detail, setDetail] = useState(null)
+
+  const handleClick = (state) => {
+    const payload = state?.activePayload?.[0]?.payload
+    if (!payload) return
+    setDetail({ label: payload.bucket, value: `${formatNumber(payload.count)} records` })
+  }
+
+  return (
+    <ChartCard title={humanizeName(column.name)} caption={buildCaption(column)} detail={detail}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={column.histogram} onClick={handleClick} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke={COLORS.border} strokeOpacity={0.28} strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey="bucket" tick={AXIS_STYLE} axisLine={false} tickLine={false} interval="preserveStartEnd" tickFormatter={(value) => trimLabel(value, 12)} />
+          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={34} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: `${COLORS.border}66` }} formatter={(value) => [formatNumber(value), 'Records']} />
+          <Bar dataKey="count" fill={COLORS.wheat} radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  )
+}
+
+function CategoricalChart({ column }) {
+  const [detail, setDetail] = useState(null)
+
+  const handleClick = (state) => {
+    const payload = state?.activePayload?.[0]?.payload
+    if (!payload) return
+    setDetail({ label: payload.value, value: `${formatNumber(payload.count)} records` })
+  }
+
+  return (
+    <ChartCard title={humanizeName(column.name)} caption={buildCaption(column)} detail={detail}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={column.top_values} layout="vertical" onClick={handleClick} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
+          <CartesianGrid stroke={COLORS.border} strokeOpacity={0.28} strokeDasharray="3 3" horizontal={false} />
+          <XAxis type="number" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+          <YAxis dataKey="value" type="category" width={112} tick={AXIS_STYLE} tickFormatter={(value) => trimLabel(value)} axisLine={false} tickLine={false} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: `${COLORS.border}66` }} formatter={(value) => [formatNumber(value), 'Records']} />
+          <Bar dataKey="count" fill={COLORS.crop} radius={[0, 4, 4, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  )
+}
+
+function TemporalChart({ column }) {
+  const [detail, setDetail] = useState(null)
+
+  const handleClick = (state) => {
+    const payload = state?.activePayload?.[0]?.payload
+    if (!payload) return
+    setDetail({ label: payload.period, value: `${formatNumber(payload.count)} records` })
+  }
+
+  return (
+    <ChartCard title={humanizeName(column.name)} caption={buildCaption(column)} detail={detail}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={column.trend} onClick={handleClick} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={COLORS.border} strokeOpacity={0.28} strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey="period" tick={AXIS_STYLE} axisLine={false} tickLine={false} tickFormatter={(value) => trimLabel(value, 12)} />
+          <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={34} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => [formatNumber(value), 'Records']} />
+          <Line type="monotone" dataKey="count" stroke={COLORS.accent} strokeWidth={3} dot={{ r: 4, fill: COLORS.accent }} activeDot={{ r: 7, fill: COLORS.wheat, stroke: COLORS.earth, strokeWidth: 2 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  )
+}
+
+export default function ChartGrid({ columns, activeFilters = 0 }) {
   if (!columns || columns.length === 0) return null
 
-  const renderable = columns.filter(c =>
-    (c.type === 'numeric' && c.histogram?.length) ||
-    (c.type === 'categorical' && c.top_values?.length) ||
-    (c.type === 'temporal' && c.trend?.length)
+  const renderable = columns.filter((column) =>
+    (column.type === 'numeric' && column.histogram?.length) ||
+    (column.type === 'categorical' && column.top_values?.length) ||
+    (column.type === 'temporal' && column.trend?.length)
   )
 
   if (renderable.length === 0) {
-    return <div className="rounded-[24px] border border-dashed border-border bg-soil/60 px-4 py-5 text-sm text-linen/70">No clear visuals were found for this record set yet.</div>
+    return (
+      <section className="rounded-lg border border-border/25 bg-linen px-4 py-5 shadow-soft">
+        <h2 className="text-lg font-semibold text-earth">Charts</h2>
+        <p className="mt-1 text-sm leading-6 text-earth/70">
+          No clear chartable fields were found {activeFilters > 0 ? 'after these filters.' : 'in this table yet.'}
+        </p>
+      </section>
+    )
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-      {renderable.map((col) => {
-        const title = humanizeLabel(col.name)
-        const insight = buildInsight(col)
-        if (col.type === 'numeric') {
-          return (
-            <ChartCard key={col.name} title={title} insight={insight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={col.histogram}>
-                  <CartesianGrid stroke="#4F3A2A" strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="bucket" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-                  <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: '#4F3A2A55' }} />
-                  <Bar dataKey="count" fill="#C79B41" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
-          )
-        }
-        if (col.type === 'categorical') {
-          return (
-            <ChartCard key={col.name} title={title} insight={insight}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={col.top_values} layout="vertical" margin={{ left: 8 }}>
-                  <CartesianGrid stroke="#4F3A2A" strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-                  <YAxis dataKey="value" type="category" width={100} tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: '#4F3A2A55' }} />
-                  <Bar dataKey="count" fill="#5A7F3D" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
-          )
-        }
-        return (
-          <ChartCard key={col.name} title={title} insight={insight}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={col.trend}>
-                <CartesianGrid stroke="#4F3A2A" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="period" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
-                <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={32} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Line type="monotone" dataKey="count" stroke="#D96C2B" strokeWidth={3} dot={{ r: 3, fill: '#D96C2B' }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </ChartCard>
-        )
-      })}
-    </div>
+    <section>
+      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-earth">Charts</h2>
+          <p className="text-sm leading-6 text-earth/70">
+            {activeFilters > 0 ? 'Redrawn for the current filters.' : 'Built from the live BigQuery column summary.'}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+        {renderable.map((column) => {
+          if (column.type === 'numeric') return <NumericChart key={column.name} column={column} />
+          if (column.type === 'categorical') return <CategoricalChart key={column.name} column={column} />
+          return <TemporalChart key={column.name} column={column} />
+        })}
+      </div>
+    </section>
   )
 }

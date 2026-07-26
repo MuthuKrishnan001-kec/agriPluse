@@ -1,46 +1,119 @@
 import { useEffect, useMemo, useState } from 'react'
 
 function formatCell(value) {
-  if (value === null || value === undefined || value === '') return '—'
+  if (value === null || value === undefined || value === '') return 'not recorded'
   if (typeof value === 'number') return value.toLocaleString()
   return String(value)
 }
 
-export default function DataTable({ rows, columns, page, pageSize, onPageChange, orderBy, orderDir, onSort }) {
-  const [viewMode, setViewMode] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'table'))
+function humanizeName(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b[a-z]/g, (char) => char.toUpperCase())
+}
+
+function SortButton({ column, orderBy, orderDir, onSort }) {
+  const active = orderBy === column
+  const label = active ? (orderDir === 'ASC' ? 'A-Z' : 'Z-A') : '<>'
+
+  if (!onSort) return null
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(column)}
+      className={`flex h-9 min-w-9 items-center justify-center rounded-md border px-2 font-mono text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        active
+          ? 'border-wheat bg-wheat text-earth'
+          : 'border-border bg-soil text-linen hover:bg-soil2'
+      }`}
+      aria-label={`Sort by ${humanizeName(column)}`}
+      title={`Sort by ${humanizeName(column)}`}
+    >
+      {label}
+    </button>
+  )
+}
+
+function EmptyRows({ colSpan, activeFilters, onClearFilters, onRetry }) {
+  return (
+    <tr>
+      <td className="px-3 py-6" colSpan={colSpan || 1}>
+        <div className="flex flex-col gap-3 text-sm text-linen/75 sm:flex-row sm:items-center sm:justify-between">
+          <span>{activeFilters > 0 ? 'No loaded rows match these filters.' : 'No rows are showing for this page.'}</span>
+          <button
+            type="button"
+            onClick={activeFilters > 0 ? onClearFilters : onRetry}
+            className="min-h-11 rounded-md border border-border bg-earth px-4 py-2 font-semibold text-linen transition hover:bg-soil2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            {activeFilters > 0 ? 'Clear filters' : 'Refresh table'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+export default function DataTable({
+  rows,
+  columns,
+  page,
+  pageSize,
+  sourceRowCount,
+  matchingRowCount,
+  activeFilters = 0,
+  onPageChange,
+  orderBy,
+  orderDir,
+  onSort,
+  onRetry,
+  onClearFilters,
+}) {
+  const [viewMode, setViewMode] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'table'
+  )
 
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 768) {
-        setViewMode((current) => current || 'cards')
-      }
+      if (window.innerWidth < 768) setViewMode((current) => current || 'cards')
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const cols = useMemo(() => columns || (rows?.[0] ? Object.keys(rows[0]) : []), [columns, rows])
+
   if (!rows) return null
-  const cols = useMemo(() => columns || (rows[0] ? Object.keys(rows[0]) : []), [columns, rows])
+
+  const loadedCount = sourceRowCount ?? rows.length
+  const matchCount = matchingRowCount ?? rows.length
+  const canGoBack = Boolean(onPageChange) && page > 0
+  const canGoForward = Boolean(onPageChange) && loadedCount >= pageSize
+  const rowCopy = activeFilters > 0
+    ? `${matchCount.toLocaleString()} matching ${matchCount === 1 ? 'row' : 'rows'} on page ${page + 1}`
+    : `${loadedCount.toLocaleString()} loaded ${loadedCount === 1 ? 'row' : 'rows'} on page ${page + 1}`
 
   return (
-    <section className="rounded-[28px] border border-border/70 bg-soil/80 shadow-soft">
-      <div className="flex flex-col gap-3 border-b border-border/70 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+    <section className="rounded-lg border border-border/25 bg-linen shadow-soft">
+      <div className="flex flex-col gap-3 border-b border-border/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="text-lg font-semibold text-linen">Latest records</div>
-          <p className="mt-1 text-sm text-linen/70">Scroll through the table or switch to cards for a touch-friendly view.</p>
+          <h2 className="text-xl font-semibold text-earth">Records</h2>
+          <p className="mt-1 text-sm text-earth/70">{rowCopy}</p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-border/70 bg-earth/60 p-1">
+        <div className="grid grid-cols-2 rounded-md border border-border/35 bg-linen p-1">
           <button
             type="button"
             onClick={() => setViewMode('table')}
-            className={`rounded-full px-3 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${viewMode === 'table' ? 'bg-wheat text-earth' : 'text-linen/70'}`}
+            className={`min-h-11 rounded px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${viewMode === 'table' ? 'bg-wheat text-earth' : 'text-earth hover:bg-wheat/20'}`}
           >
             Table
           </button>
           <button
             type="button"
             onClick={() => setViewMode('cards')}
-            className={`rounded-full px-3 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${viewMode === 'cards' ? 'bg-crop text-earth' : 'text-linen/70'}`}
+            className={`min-h-11 rounded px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${viewMode === 'cards' ? 'bg-crop text-linen' : 'text-earth hover:bg-wheat/20'}`}
           >
             Cards
           </button>
@@ -48,87 +121,94 @@ export default function DataTable({ rows, columns, page, pageSize, onPageChange,
       </div>
 
       {viewMode === 'table' ? (
-        <div className="overflow-x-auto">
+        <div className="max-h-[640px] overflow-auto">
           <table className="min-w-full border-collapse text-left text-sm">
-            <thead className="bg-earth/70 text-[11px] uppercase tracking-[0.24em] text-muted">
+            <thead className="sticky top-0 z-10 bg-earth text-xs uppercase text-muted shadow-[0_1px_0_#4F3A2A]">
               <tr>
-                {cols.map((c) => (
-                  <th key={c} className="border-b border-border/70 px-3 py-3">
-                    {onSort ? (
-                      <button
-                        type="button"
-                        onClick={() => onSort(c)}
-                        className="flex items-center gap-2 rounded-full px-2 py-1 text-left font-semibold text-linen/80 transition hover:bg-soil/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <span>{c}</span>
-                        <span className="text-xs text-wheat">{orderBy === c ? (orderDir === 'ASC' ? '↑' : '↓') : '↕'}</span>
-                      </button>
-                    ) : (
-                      <span className="px-2 py-1">{c}</span>
-                    )}
+                {cols.map((column) => (
+                  <th key={column} className="min-w-[150px] border-b border-border px-3 py-2">
+                    <div className="flex min-h-10 items-center justify-between gap-2">
+                      <span className="truncate font-semibold">{humanizeName(column)}</span>
+                      <SortButton column={column} orderBy={orderBy} orderDir={orderDir} onSort={onSort} />
+                    </div>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, i) => (
-                <tr key={i} className="border-b border-border/60 text-linen/85">
-                  {cols.map((c) => (
-                    <td key={c} className="max-w-[220px] whitespace-nowrap px-3 py-3 text-sm">
-                      <div className="truncate font-mono text-[13px]">{formatCell(row[c])}</div>
+              {rows.map((row, index) => (
+                <tr key={`${page}-${index}`} className={`border-b border-border/70 text-linen/90 ${index % 2 === 0 ? 'bg-soil' : 'bg-soil2'}`}>
+                  {cols.map((column) => (
+                    <td key={column} className="max-w-[240px] whitespace-nowrap px-3 py-2.5 align-top">
+                      <div className="truncate font-mono text-[13px]">{formatCell(row[column])}</div>
                     </td>
                   ))}
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr>
-                  <td className="px-3 py-6 text-sm text-linen/60" colSpan={cols.length || 1}>No rows returned for this view.</td>
-                </tr>
+                <EmptyRows
+                  colSpan={cols.length}
+                  activeFilters={activeFilters}
+                  onClearFilters={onClearFilters}
+                  onRetry={onRetry}
+                />
               )}
             </tbody>
           </table>
         </div>
       ) : (
         <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-          {rows.map((row, i) => (
-            <article key={i} className="rounded-[22px] border border-border/70 bg-earth/60 p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-sm font-semibold text-linen">Record {page * pageSize + i + 1}</div>
-                <div className="rounded-full border border-crop/30 bg-crop/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-crop">
-                  Quick view
-                </div>
+          {rows.map((row, index) => (
+            <article key={`${page}-${index}`} className="border border-border bg-earth px-4 py-4">
+              <div className="flex min-h-8 items-center justify-between gap-3 border-b border-border pb-3">
+                <h3 className="font-semibold text-linen">Record {(page * pageSize + index + 1).toLocaleString()}</h3>
+                <span className="rounded-md border border-crop/40 bg-soil px-2 py-1 text-xs font-semibold uppercase text-crop">Live</span>
               </div>
-              <div className="space-y-2 text-sm text-linen/80">
-                {cols.map((c) => (
-                  <div key={c} className="rounded-xl bg-soil/70 p-2.5">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">{c}</div>
-                    <div className="mt-1 break-words font-mono text-[13px] text-linen">{formatCell(row[c])}</div>
+              <dl className="divide-y divide-border">
+                {cols.map((column) => (
+                  <div key={column} className="grid grid-cols-[minmax(7rem,40%)_1fr] gap-3 py-2.5">
+                    <dt className="text-xs font-semibold uppercase text-muted">{humanizeName(column)}</dt>
+                    <dd className="break-words font-mono text-[13px] text-linen">{formatCell(row[column])}</dd>
                   </div>
                 ))}
-              </div>
+              </dl>
             </article>
           ))}
+          {rows.length === 0 && (
+            <div className="border border-border bg-earth px-4 py-5 text-sm text-linen/75 sm:col-span-2 lg:col-span-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span>{activeFilters > 0 ? 'No loaded rows match these filters.' : 'No rows are showing for this page.'}</span>
+                <button
+                  type="button"
+                  onClick={activeFilters > 0 ? onClearFilters : onRetry}
+                  className="min-h-11 rounded-md border border-border bg-soil px-4 py-2 font-semibold text-linen transition hover:bg-soil2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  {activeFilters > 0 ? 'Clear filters' : 'Refresh table'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      <div className="flex flex-col gap-3 border-t border-border/70 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div className="text-sm text-linen/70">Showing page {page + 1}</div>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 border-t border-border/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-earth/70">Page {(page + 1).toLocaleString()}</p>
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             type="button"
-            onClick={() => onPageChange(Math.max(0, page - 1))}
-            disabled={page === 0}
-            className="min-h-11 rounded-full border border-border/70 bg-earth/70 px-4 py-2 text-sm font-semibold text-linen transition hover:bg-soil/70 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onClick={() => onPageChange?.(Math.max(0, page - 1))}
+            disabled={!canGoBack}
+            className="min-h-12 rounded-md border border-border/35 bg-linen px-4 py-2 text-sm font-semibold text-earth transition hover:bg-wheat/20 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            ← Previous
+            Previous
           </button>
           <button
             type="button"
-            onClick={() => onPageChange(page + 1)}
-            disabled={rows.length < pageSize}
-            className="min-h-11 rounded-full border border-border/70 bg-earth/70 px-4 py-2 text-sm font-semibold text-linen transition hover:bg-soil/70 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onClick={() => onPageChange?.(page + 1)}
+            disabled={!canGoForward}
+            className="min-h-12 rounded-md border border-border/35 bg-linen px-4 py-2 text-sm font-semibold text-earth transition hover:bg-wheat/20 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            Next →
+            Next
           </button>
         </div>
       </div>

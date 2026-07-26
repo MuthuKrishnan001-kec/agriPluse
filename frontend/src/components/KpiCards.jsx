@@ -1,27 +1,66 @@
-function Card({ label, value, accent, icon }) {
+function formatNumber(value) {
+  if (value === null || value === undefined || value === '') return 'Not ready'
+  return Number(value).toLocaleString()
+}
+
+function formatBytes(value) {
+  if (!value) return 'Not ready'
+  if (value >= 1e9) return `${(value / 1e9).toFixed(1)} GB`
+  return `${(value / 1e6).toFixed(1)} MB`
+}
+
+function Card({ label, value, helper, tone = 'wheat' }) {
+  const toneClass = {
+    wheat: 'border-wheat/60 bg-wheat/15 text-earth',
+    crop: 'border-crop/50 bg-crop/10 text-crop',
+    accent: 'border-accent/50 bg-accent/10 text-accent',
+    linen: 'border-border/25 bg-linen text-earth',
+  }[tone]
+
   return (
-    <div className="min-w-[150px] flex-1 rounded-[24px] border border-border/70 bg-soil/80 p-4 shadow-soft">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted">{label}</div>
-        <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-earth/70 text-lg">{icon}</div>
+    <article className="rounded-lg border border-border/25 bg-linen px-4 py-4 shadow-soft">
+      <div className={`inline-flex min-h-8 items-center rounded-md border px-2.5 text-xs font-semibold uppercase ${toneClass}`}>
+        {label}
       </div>
-      <div className={`mt-4 text-2xl font-semibold ${accent || 'text-linen'}`}>{value}</div>
-    </div>
+      <div className="mt-3 font-display text-3xl leading-none text-earth">{value}</div>
+      <p className="mt-2 text-sm leading-5 text-earth/70">{helper}</p>
+    </article>
   )
 }
 
-export default function KpiCards({ schema }) {
+export default function KpiCards({ schema, loadedRows = 0, matchingRows = 0, activeFilters = 0 }) {
   if (!schema) return null
-  const numericCount = schema.fields.filter(f =>
-    ['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC'].includes(f.type)
+
+  const numericCount = schema.fields.filter((field) =>
+    ['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC'].includes(field.type)
   ).length
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <Card label="Live rows" value={schema.num_rows?.toLocaleString() ?? '—'} accent="text-wheat" icon="📊" />
-      <Card label="Data size" value={schema.num_bytes ? `${(schema.num_bytes / 1e6).toFixed(1)} MB` : '—'} accent="text-crop" icon="🧺" />
-      <Card label="Fields" value={schema.fields.length} accent="text-accent" icon="🧾" />
-      <Card label="Number fields" value={numericCount} accent="text-linen" icon="🔢" />
-    </div>
+    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+      <Card
+        label="Source rows"
+        value={formatNumber(schema.num_rows)}
+        helper="Total rows reported by BigQuery for this table."
+        tone="wheat"
+      />
+      <Card
+        label={activeFilters > 0 ? 'Matches shown' : 'Rows loaded'}
+        value={formatNumber(activeFilters > 0 ? matchingRows : loadedRows)}
+        helper={activeFilters > 0 ? 'Rows matching the active field filters.' : 'Rows loaded into the current page.'}
+        tone="crop"
+      />
+      <Card
+        label="Fields"
+        value={formatNumber(schema.fields.length)}
+        helper={`${numericCount.toLocaleString()} number ${numericCount === 1 ? 'field' : 'fields'} available for charts.`}
+        tone="accent"
+      />
+      <Card
+        label="Table size"
+        value={formatBytes(schema.num_bytes)}
+        helper="Approximate storage size of the live source table."
+        tone="linen"
+      />
+    </section>
   )
 }
