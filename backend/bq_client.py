@@ -210,7 +210,23 @@ def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000)
         name, ftype = field["name"], field["type"]
         col = f"`{name}`"
         try:
-            if ftype in ("INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"):
+            if "year" in name.lower():
+                sql = f"""
+                    SELECT {col} AS year, COUNT(*) AS count
+                    FROM {full_table}
+                    WHERE {col} IS NOT NULL
+                    GROUP BY year ORDER BY year
+                """
+                trend = []
+                for r in client.query(sql).result():
+                    if r.year is not None:
+                        try:
+                            val = int(r.year)
+                            trend.append({"year": val, "count": r.count})
+                        except (ValueError, TypeError):
+                            trend.append({"year": str(r.year), "count": r.count})
+                summaries.append({"name": name, "type": "year", "trend": trend})
+            elif ftype in ("INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"):
                 sql = f"""
                     SELECT MIN({col}) AS min_v, MAX({col}) AS max_v,
                            AVG({col}) AS avg_v, COUNT({col}) AS non_null
