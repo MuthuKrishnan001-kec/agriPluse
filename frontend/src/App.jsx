@@ -3,32 +3,37 @@ import { api } from './api'
 import KpiCards from './components/KpiCards'
 import ChartGrid from './components/ChartGrid'
 import DataTable from './components/DataTable'
+import SearchableSelect from './components/SearchableSelect'
 
 const PAGE_SIZE = 25
 
-// The six known cascading filter fields, in hierarchy order.
-// Zone is the parent of District; the rest are independent.
+// The six known cascading filter fields in hierarchy order.
+// Zone is the parent of District; all others are independent of each other.
 const KNOWN_FILTER_FIELDS = [
-  { key: 'zone',          label: 'Zone',          priority: 1 },
-  { key: 'district_name', label: 'District Name',  priority: 2 },
-  { key: 'crop',          label: 'Crop',           priority: 3 },
-  { key: 'season',        label: 'Season',         priority: 4 },
-  { key: 'soil_type',     label: 'Soil Type',      priority: 5 },
-  { key: 'year',          label: 'Year',           priority: 6 },
+  { key: 'zone',          label: 'Zone',         priority: 1 },
+  { key: 'district_name', label: 'District Name', priority: 2 },
+  { key: 'crop',          label: 'Crop',          priority: 3 },
+  { key: 'season',        label: 'Season',        priority: 4 },
+  { key: 'soil_type',     label: 'Soil Type',     priority: 5 },
+  { key: 'year',          label: 'Year',          priority: 6 },
 ]
 
-// district_name is the child of zone — when zone changes, district must be re-validated
+// Declare which field is a child of which parent.
+// When a parent changes, the child's current selection must be re-validated.
 const CHILD_OF = { district_name: 'zone' }
 
 const NUMERIC_TYPES = new Set(['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC'])
 const TEMPORAL_TYPES = new Set(['DATE', 'DATETIME', 'TIMESTAMP'])
 
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
 function humanizeName(value) {
   return String(value || '')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .replace(/\b[a-z]/g, (char) => char.toUpperCase())
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase())
 }
 
 function formatValue(value) {
@@ -42,18 +47,17 @@ function formatValue(value) {
 }
 
 function formatShortNumber(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return formatValue(value)
-  return number.toLocaleString(undefined, { maximumFractionDigits: Math.abs(number) >= 10 ? 0 : 2 })
+  const n = Number(value)
+  if (!Number.isFinite(n)) return formatValue(value)
+  return n.toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) >= 10 ? 0 : 2 })
 }
 
-function friendlyError(message) {
-  const text = String(message || '').trim()
-  if (!text) return 'The live connection did not send back enough detail. Try again in a moment.'
-  if (/failed to fetch|networkerror|load failed/i.test(text)) {
+function friendlyError(msg) {
+  const t = String(msg || '').trim()
+  if (!t) return 'The live connection did not send back enough detail. Try again in a moment.'
+  if (/failed to fetch|networkerror|load failed/i.test(t))
     return 'The dashboard could not reach the live data service. Check that the backend is running, then try again.'
-  }
-  return text
+  return t
 }
 
 function getSummaryType(field, columnSummary) {
@@ -65,196 +69,132 @@ function getSummaryType(field, columnSummary) {
 }
 
 function sortFilterValues(a, b) {
-  const left = Number(a)
-  const right = Number(b)
-  if (Number.isFinite(left) && Number.isFinite(right)) return left - right
+  const l = Number(a), r = Number(b)
+  if (Number.isFinite(l) && Number.isFinite(r)) return l - r
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
 }
 
 function countBy(values) {
-  return values.reduce((counts, value) => {
-    const key = formatValue(value)
-    counts.set(key, (counts.get(key) || 0) + 1)
-    return counts
+  return values.reduce((acc, v) => {
+    const k = formatValue(v)
+    acc.set(k, (acc.get(k) || 0) + 1)
+    return acc
   }, new Map())
 }
 
-function summarizeRowsForCharts(referenceColumns, rows, schema) {
-  if (!referenceColumns?.length || !rows) return []
-  const schemaByName = new Map((schema?.fields || []).map((field) => [field.name, field]))
-
-  return referenceColumns.map((column) => {
-    const field = schemaByName.get(column.name)
-    const type = getSummaryType(field, column)
-    const values = rows.map((row) => row?.[column.name]).filter((value) => value !== null && value !== undefined && value !== '')
-
+function summarizeRowsForCharts(refCols, rows, schema) {
+  if (!refCols?.length || !rows) return []
+  const byName = new Map((schema?.fields || []).map((f) => [f.name, f]))
+  return refCols.map((col) => {
+    const field = byName.get(col.name)
+    const type = getSummaryType(field, col)
+    const vals = rows.map((r) => r?.[col.name]).filter((v) => v !== null && v !== undefined && v !== '')
     if (type === 'numeric') {
-      const numbers = values.map(Number).filter(Number.isFinite)
-      if (numbers.length === 0) return { ...column, histogram: [], non_null: 0 }
-
-      const min = Math.min(...numbers)
-      const max = Math.max(...numbers)
-      const avg = numbers.reduce((sum, value) => sum + value, 0) / numbers.length
-      const bucketCount = min === max ? 1 : 10
-      const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+      const nums = vals.map(Number).filter(Number.isFinite)
+      if (!nums.length) return { ...col, histogram: [], non_null: 0 }
+      const min = Math.min(...nums), max = Math.max(...nums)
+      const avg = nums.reduce((s, v) => s + v, 0) / nums.length
+      const bc = min === max ? 1 : 10
+      const buckets = Array.from({ length: bc }, (_, i) => ({
         bucket: min === max
           ? formatShortNumber(min)
-          : `${formatShortNumber(min + ((max - min) / bucketCount) * index)}-${formatShortNumber(min + ((max - min) / bucketCount) * (index + 1))}`,
+          : `${formatShortNumber(min + ((max - min) / bc) * i)}-${formatShortNumber(min + ((max - min) / bc) * (i + 1))}`,
         count: 0,
       }))
-
-      numbers.forEach((value) => {
-        const index = min === max ? 0 : Math.min(bucketCount - 1, Math.floor(((value - min) / (max - min)) * bucketCount))
-        buckets[index].count += 1
+      nums.forEach((v) => {
+        const i = min === max ? 0 : Math.min(bc - 1, Math.floor(((v - min) / (max - min)) * bc))
+        buckets[i].count += 1
       })
-
-      return { ...column, type: 'numeric', min, max, avg, non_null: numbers.length, histogram: buckets }
+      return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets }
     }
-
     if (type === 'categorical') {
-      const topValues = Array.from(countBy(values).entries())
-        .map(([value, count]) => ({ value, count }))
+      const top = Array.from(countBy(vals).entries())
+        .map(([v, c]) => ({ value: v, count: c }))
         .sort((a, b) => b.count - a.count || sortFilterValues(a.value, b.value))
         .slice(0, 10)
-
-      return { ...column, type: 'categorical', top_values: topValues }
+      return { ...col, type: 'categorical', top_values: top }
     }
-
     if (type === 'temporal') {
-      const periods = values
-        .map((value) => {
-          const date = new Date(value)
-          if (Number.isNaN(date.getTime())) return null
-          return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-        })
-        .filter(Boolean)
-
+      const periods = vals.map((v) => {
+        const d = new Date(v)
+        if (isNaN(d)) return null
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      }).filter(Boolean)
       const trend = Array.from(countBy(periods).entries())
-        .map(([period, count]) => ({ period, count }))
+        .map(([p, c]) => ({ period: p, count: c }))
         .sort((a, b) => a.period.localeCompare(b.period))
-
-      return { ...column, type: 'temporal', trend }
+      return { ...col, type: 'temporal', trend }
     }
-
-    return column
+    return col
   })
 }
 
-function chooseMetricColumn(columns) {
-  const numericColumns = (columns || []).filter((column) => column.type === 'numeric' && column.non_null !== 0)
+function chooseMetric(cols) {
+  const num = (cols || []).filter((c) => c.type === 'numeric' && c.non_null !== 0)
+  return num.find((c) => /yield|production|harvest|output|area|rain|income|price/i.test(c.name)) || num[0]
+}
+
+function chooseDim(fields) {
   return (
-    numericColumns.find((column) => /yield|production|harvest|output|area|rain|income|price/i.test(column.name)) ||
-    numericColumns[0]
+    fields.find((f) => /crop/i.test(f.key)) ||
+    fields.find((f) => /district|zone|region|state/i.test(f.key)) ||
+    fields.find((f) => /season/i.test(f.key)) ||
+    fields[0]
   )
 }
 
-function chooseDimension(filterFields) {
-  return (
-    filterFields.find((field) => /crop/i.test(field.key)) ||
-    filterFields.find((field) => /district|zone|region|state/i.test(field.key)) ||
-    filterFields.find((field) => /season/i.test(field.key)) ||
-    filterFields[0]
-  )
+function filterLabel(fields, filters) {
+  const active = fields.filter((f) => filters[f.key])
+  if (!active.length) return 'All records in the current view are included.'
+  return `Filtered by ${active.map((f) => `${f.label}: ${filters[f.key]}`).join(', ')}.`
 }
 
-function getFilterLabel(filterFields, filters) {
-  const active = filterFields.filter((field) => filters[field.key])
-  if (active.length === 0) return 'All records in the current view are included.'
-  return `Filtered by ${active.map((field) => `${field.label}: ${filters[field.key]}`).join(', ')}.`
-}
+function buildPlainSummary({ cols, rows, schema, fields, filters }) {
+  const rc = rows?.length ?? 0
+  const metric = chooseMetric(cols)
+  const dim = chooseDim(fields)
+  const afc = Object.values(filters).filter(Boolean).length
+  const label = filterLabel(fields, filters)
 
-function buildPlainSummary({ columns, filteredRows, schema, filterFields, filters }) {
-  const rowCount = filteredRows?.length ?? 0
-  const metric = chooseMetricColumn(columns)
-  const dimension = chooseDimension(filterFields)
-  const activeFilterCount = Object.values(filters).filter(Boolean).length
-  const filterCopy = getFilterLabel(filterFields, filters)
-
-  if (!columns?.length && schema) {
-    return {
-      headline: `This table has ${schema.num_rows?.toLocaleString?.() || 'live'} source records across ${schema.fields?.length || 0} fields.`,
-      detail: filterCopy,
-    }
-  }
-
-  if (activeFilterCount > 0 && rowCount === 0) {
-    return {
-      headline: 'No loaded records match this exact combination yet.',
-      detail: 'Clear one filter or move to another page to keep looking through the live table.',
-    }
-  }
-
-  if (metric && dimension && rowCount > 0) {
+  if (!cols?.length && schema)
+    return { headline: `This table has ${schema.num_rows?.toLocaleString?.() || 'live'} source records across ${schema.fields?.length || 0} fields.`, detail: label }
+  if (afc > 0 && rc === 0)
+    return { headline: 'No loaded records match this exact combination yet.', detail: 'Clear one filter or move to another page to keep looking.' }
+  if (metric && dim && rc > 0) {
     const groups = new Map()
-    filteredRows.forEach((row) => {
-      const groupValue = row?.[dimension.key]
-      const metricValue = Number(row?.[metric.name])
-      if (groupValue === null || groupValue === undefined || groupValue === '' || !Number.isFinite(metricValue)) return
-      const key = formatValue(groupValue)
-      const current = groups.get(key) || { total: 0, count: 0 }
-      current.total += metricValue
-      current.count += 1
-      groups.set(key, current)
+    rows.forEach((row) => {
+      const gv = row?.[dim.key], mv = Number(row?.[metric.name])
+      if (gv == null || gv === '' || !Number.isFinite(mv)) return
+      const k = formatValue(gv)
+      const cur = groups.get(k) || { total: 0, count: 0 }
+      cur.total += mv; cur.count += 1; groups.set(k, cur)
     })
-
-    const topGroup = Array.from(groups.entries())
-      .map(([value, item]) => ({ value, average: item.total / item.count, count: item.count }))
-      .sort((a, b) => b.average - a.average)[0]
-
-    if (topGroup) {
-      return {
-        headline: `${humanizeName(metric.name)} is highest for ${topGroup.value}, averaging ${formatShortNumber(topGroup.average)} in the records now shown.`,
-        detail: `${filterCopy} This is based on ${rowCount.toLocaleString()} loaded ${rowCount === 1 ? 'record' : 'records'}.`,
-      }
+    const top = Array.from(groups.entries()).map(([v, i]) => ({ value: v, avg: i.total / i.count })).sort((a, b) => b.avg - a.avg)[0]
+    if (top) return {
+      headline: `${humanizeName(metric.name)} is highest for ${top.value}, averaging ${formatShortNumber(top.avg)} in the records now shown.`,
+      detail: `${label} Based on ${rc.toLocaleString()} loaded ${rc === 1 ? 'record' : 'records'}.`,
     }
   }
-
-  const categorical = (columns || []).find((column) => column.type === 'categorical' && column.top_values?.length)
-  if (categorical) {
-    const top = categorical.top_values[0]
-    return {
-      headline: `${formatValue(top.value)} is the most common ${humanizeName(categorical.name).toLowerCase()}, appearing ${formatValue(top.count)} times.`,
-      detail: filterCopy,
-    }
-  }
-
-  if (metric) {
-    return {
-      headline: `${humanizeName(metric.name)} averages ${formatShortNumber(metric.avg)} with values from ${formatShortNumber(metric.min)} to ${formatShortNumber(metric.max)}.`,
-      detail: filterCopy,
-    }
-  }
-
+  const cat = (cols || []).find((c) => c.type === 'categorical' && c.top_values?.length)
+  if (cat) { const t = cat.top_values[0]; return { headline: `${formatValue(t.value)} is the most common ${humanizeName(cat.name).toLowerCase()}, appearing ${formatValue(t.count)} times.`, detail: label } }
+  if (metric) return { headline: `${humanizeName(metric.name)} averages ${formatShortNumber(metric.avg)} with values from ${formatShortNumber(metric.min)} to ${formatShortNumber(metric.max)}.`, detail: label }
   return {
-    headline: rowCount > 0
-      ? `There are ${rowCount.toLocaleString()} loaded ${rowCount === 1 ? 'record' : 'records'} ready to review.`
-      : 'Choose a dataset and table to see the live farm view.',
-    detail: filterCopy,
+    headline: rc > 0 ? `There are ${rc.toLocaleString()} loaded ${rc === 1 ? 'record' : 'records'} ready to review.` : 'Choose a dataset and table to see the live farm view.',
+    detail: label,
   }
 }
 
 // ---------------------------------------------------------------------------
-// FilterBar — driven by dynamic options fetched from the backend
+// FilterBar
 // ---------------------------------------------------------------------------
 function FilterBar({
-  datasets,
-  tables,
-  selectedDataset,
-  selectedTable,
-  filters,
-  filterFields,
-  filterOptions,
-  loadingFilterOptions,
-  loadingDatasets,
-  loadingTables,
-  running,
-  onSelectDataset,
-  onSelectTable,
-  onFilterChange,
-  onClearFilters,
-  onRefresh,
+  datasets, tables,
+  selectedDataset, selectedTable,
+  filters, filterFields, filterOptions, loadingFilterOptions,
+  loadingDatasets, loadingTables, running,
+  onSelectDataset, onSelectTable, onFilterChange, onClearFilters, onRefresh,
 }) {
-  const activeFilterCount = Object.values(filters).filter(Boolean).length
+  const afc = Object.values(filters).filter(Boolean).length
 
   return (
     <section className="rounded-lg border border-border/25 bg-linen p-5 shadow-soft sm:p-6">
@@ -262,7 +202,7 @@ function FilterBar({
         <div>
           <h2 className="text-lg font-semibold text-earth">Farm view filters</h2>
           <p className="mt-1 text-sm leading-6 text-earth/70">
-            Pick the live table, then narrow it by zone, district, crop, and more.
+            Pick the live table, then narrow by zone, district, crop, and more.
           </p>
         </div>
         <button
@@ -275,61 +215,48 @@ function FilterBar({
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        {/* Dataset plain select */}
         <label className="flex flex-col gap-2 text-sm text-earth">
           <span className="font-semibold">Dataset</span>
           <select
             value={selectedDataset || ''}
-            onChange={(event) => onSelectDataset(event.target.value || null)}
-            className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onChange={(e) => onSelectDataset(e.target.value || null)}
             disabled={loadingDatasets}
+            className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <option value="">{loadingDatasets ? 'Loading datasets...' : 'Choose a dataset'}</option>
-            {datasets.map((dataset) => (
-              <option key={dataset} value={dataset}>{dataset}</option>
-            ))}
+            <option value="">{loadingDatasets ? 'Loading datasets…' : 'Choose a dataset'}</option>
+            {datasets.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
         </label>
 
+        {/* Table plain select */}
         <label className="flex flex-col gap-2 text-sm text-earth">
           <span className="font-semibold">Table</span>
           <select
             value={selectedTable || ''}
-            onChange={(event) => onSelectTable(event.target.value || null)}
-            className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+            onChange={(e) => onSelectTable(e.target.value || null)}
             disabled={!selectedDataset || loadingTables}
+            className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <option value="">
-              {!selectedDataset ? 'Choose a dataset first' : loadingTables ? 'Loading tables...' : 'Choose a table'}
-            </option>
-            {tables.map((table) => (
-              <option key={table} value={table}>{table}</option>
-            ))}
+            <option value="">{!selectedDataset ? 'Choose a dataset first' : loadingTables ? 'Loading tables…' : 'Choose a table'}</option>
+            {tables.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
 
+        {/* Dynamic filter fields — each with a searchable dropdown */}
         {filterFields.map((field) => {
-          const options = filterOptions[field.key] || []
-          const isLoading = loadingFilterOptions
+          const opts = (filterOptions[field.key] || []).slice().sort(sortFilterValues)
           return (
-            <label key={field.key} className="flex flex-col gap-2 text-sm text-earth">
-              <span className="font-semibold flex items-center gap-2">
-                {field.label}
-                {isLoading && (
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-crop border-t-transparent" aria-label="Loading options" />
-                )}
-              </span>
-              <select
+            <div key={field.key} className="flex flex-col gap-2 text-sm text-earth">
+              <span className="font-semibold">{field.label}</span>
+              <SearchableSelect
                 value={filters[field.key] || ''}
-                onChange={(event) => onFilterChange(field.key, event.target.value)}
-                disabled={isLoading || options.length === 0}
-                className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">All {field.label.toLowerCase()}</option>
-                {options.sort(sortFilterValues).map((value) => (
-                  <option key={value} value={value}>{value}</option>
-                ))}
-              </select>
-            </label>
+                options={opts}
+                placeholder={`All ${field.label.toLowerCase()}`}
+                loading={loadingFilterOptions && opts.length === 0}
+                onChange={(val) => onFilterChange(field.key, val)}
+              />
+            </div>
           )
         })}
       </div>
@@ -339,32 +266,35 @@ function FilterBar({
           {running
             ? 'Pulling the newest records for this table.'
             : selectedTable
-              ? activeFilterCount > 0
-                ? `${activeFilterCount} ${activeFilterCount === 1 ? 'filter is' : 'filters are'} active.`
+              ? afc > 0
+                ? `${afc} ${afc === 1 ? 'filter is' : 'filters are'} active — results fetched from BigQuery.`
                 : filterFields.length > 0
-                  ? 'Use the field filters to narrow the current farm view.'
+                  ? 'Use the searchable filters above to narrow the current farm view.'
                   : 'This table is ready; no filter fields were detected.'
               : 'Choose a dataset and table to begin.'}
         </p>
         <button
           type="button"
           onClick={onClearFilters}
-          disabled={activeFilterCount === 0}
+          disabled={afc === 0}
           className="min-h-11 rounded-md border border-border/35 bg-linen px-4 py-2 text-sm font-semibold text-earth transition hover:bg-wheat/20 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          Clear field filters
+          Clear all filters
         </button>
       </div>
     </section>
   )
 }
 
+// ---------------------------------------------------------------------------
+// Shell components
+// ---------------------------------------------------------------------------
 function AppHeader() {
   return (
     <nav className="bg-crop shadow-soft">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div>
-          <div className="block text-xl font-bold tracking-tight text-linen">Farm Data Benchmark</div>
+          <div className="text-xl font-bold tracking-tight text-linen">Farm Data Benchmark</div>
           <div className="text-xs font-medium uppercase text-linen/80">Live BigQuery agricultural records</div>
         </div>
       </div>
@@ -395,9 +325,9 @@ function PlainSummary({ summary }) {
 }
 
 function StatePanel({ title, body, actionLabel, onAction, tone = 'neutral' }) {
-  const toneClass = tone === 'error' ? 'border-accent bg-accent/10' : 'border-border/25 bg-linen'
+  const cls = tone === 'error' ? 'border-accent bg-accent/10' : 'border-border/25 bg-linen'
   return (
-    <section className={`rounded-lg border px-4 py-5 shadow-soft ${toneClass}`}>
+    <section className={`rounded-lg border px-4 py-5 shadow-soft ${cls}`}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-earth">{title}</h2>
@@ -421,176 +351,124 @@ function StatePanel({ title, body, actionLabel, onAction, tone = 'neutral' }) {
 // Main App
 // ---------------------------------------------------------------------------
 export default function App() {
-  const [datasets, setDatasets] = useState([])
-  const [tables, setTables] = useState([])
+  const [datasets, setDatasets]         = useState([])
+  const [tables, setTables]             = useState([])
   const [selectedDataset, setSelectedDataset] = useState(null)
-  const [selectedTable, setSelectedTable] = useState(null)
+  const [selectedTable, setSelectedTable]     = useState(null)
 
-  const [schema, setSchema] = useState(null)
+  const [schema, setSchema]   = useState(null)
   const [summary, setSummary] = useState(null)
-  const [rows, setRows] = useState(null)
-  const [page, setPage] = useState(0)
+  const [rows, setRows]       = useState(null)
+  const [page, setPage]       = useState(0)
   const [orderBy, setOrderBy] = useState(null)
   const [orderDir, setOrderDir] = useState('ASC')
 
-  const [running, setRunning] = useState(false)
-  const [loadingDatasets, setLoadingDatasets] = useState(false)
-  const [loadingTables, setLoadingTables] = useState(false)
+  const [running, setRunning]                     = useState(false)
+  const [loadingDatasets, setLoadingDatasets]     = useState(false)
+  const [loadingTables, setLoadingTables]         = useState(false)
   const [loadingFilterOptions, setLoadingFilterOptions] = useState(false)
-  const [error, setError] = useState(null)
+  const [error, setError]                         = useState(null)
 
-  // filters: { zone, district_name, crop, season, soil_type, year }
-  const [filters, setFilters] = useState({})
-  // filterOptions: { zone: [...], district_name: [...], ... } — fetched from backend
+  // Active filter selections: { zone: '', district_name: '', crop: '', … }
+  const [filters, setFilters]           = useState({})
+  // Options returned by the backend per field
   const [filterOptions, setFilterOptions] = useState({})
-  // Which filter fields are actually present in the current table (detected from schema)
+  // Which of KNOWN_FILTER_FIELDS actually exist in the current table schema
   const [filterFields, setFilterFields] = useState([])
 
-  // Debounce ref so rapid filter changes don't spam the API
-  const filterOptionsFetchRef = useRef(null)
+  const debounceRef = useRef(null)
 
   // -------------------------------------------------------------------------
-  // Detect which KNOWN_FILTER_FIELDS exist in the current table schema
+  // Detect which known filter fields exist in the loaded schema
   // -------------------------------------------------------------------------
   useEffect(() => {
-    if (!schema?.fields?.length) {
-      setFilterFields([])
-      return
-    }
+    if (!schema?.fields?.length) { setFilterFields([]); return }
     const schemaKeys = new Set(schema.fields.map((f) => f.name.toLowerCase()))
-    const present = KNOWN_FILTER_FIELDS.filter((f) => schemaKeys.has(f.key.toLowerCase()))
-    setFilterFields(present)
+    setFilterFields(KNOWN_FILTER_FIELDS.filter((f) => schemaKeys.has(f.key.toLowerCase())))
   }, [schema])
 
   // -------------------------------------------------------------------------
-  // Fetch filter options from backend whenever table or filters change
+  // Fetch filter options from backend (debounced 120 ms)
   // -------------------------------------------------------------------------
-  const loadFilterOptions = useCallback(
-    async (dataset, table, currentFilters, fields) => {
-      if (!dataset || !table || !fields?.length) return
-
-      // Debounce: cancel any pending fetch and wait 120 ms
-      if (filterOptionsFetchRef.current) clearTimeout(filterOptionsFetchRef.current)
-
-      filterOptionsFetchRef.current = setTimeout(async () => {
-        setLoadingFilterOptions(true)
-        try {
-          const result = await api.getFilterOptions(dataset, table, fields.map((f) => f.key), currentFilters)
-          setFilterOptions(result.options || {})
-        } catch {
-          // Silently keep existing options on error
-        } finally {
-          setLoadingFilterOptions(false)
-        }
-      }, 120)
-    },
-    []
-  )
+  const loadFilterOptions = useCallback((dataset, table, currentFilters, fields) => {
+    if (!dataset || !table || !fields?.length) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setLoadingFilterOptions(true)
+      try {
+        const res = await api.getFilterOptions(dataset, table, fields.map((f) => f.key), currentFilters)
+        setFilterOptions(res.options || {})
+      } catch { /* keep existing options on error */ }
+      finally { setLoadingFilterOptions(false) }
+    }, 120)
+  }, [])
 
   // -------------------------------------------------------------------------
   // Data loaders
   // -------------------------------------------------------------------------
   const loadDatasets = useCallback(async () => {
-    setLoadingDatasets(true)
-    setError(null)
-    try {
-      const result = await api.listDatasets()
-      setDatasets(result.datasets || [])
-    } catch (e) {
-      setError({ scope: 'datasets', message: friendlyError(e.message) })
-    } finally {
-      setLoadingDatasets(false)
-    }
+    setLoadingDatasets(true); setError(null)
+    try { setDatasets((await api.listDatasets()).datasets || []) }
+    catch (e) { setError({ scope: 'datasets', message: friendlyError(e.message) }) }
+    finally { setLoadingDatasets(false) }
   }, [])
 
   const loadTables = useCallback(async (dataset) => {
     if (!dataset) return
-    setLoadingTables(true)
-    setError(null)
-    try {
-      const result = await api.listTables(dataset)
-      setTables(result.tables || [])
-    } catch (e) {
-      setError({ scope: 'tables', message: friendlyError(e.message) })
-    } finally {
-      setLoadingTables(false)
-    }
+    setLoadingTables(true); setError(null)
+    try { setTables((await api.listTables(dataset)).tables || []) }
+    catch (e) { setError({ scope: 'tables', message: friendlyError(e.message) }) }
+    finally { setLoadingTables(false) }
   }, [])
 
-  const loadTable = useCallback(
-    async (dataset, table, pageArg = 0, orderByArg = null, orderDirArg = 'ASC', activeFilters = {}) => {
-      setRunning(true)
-      setError(null)
-      try {
-        const [schemaRes, summaryRes, dataRes] = await Promise.all([
-          api.getSchema(dataset, table),
-          api.getSummary(dataset, table),
-          api.getData(dataset, table, {
-            limit: PAGE_SIZE,
-            offset: pageArg * PAGE_SIZE,
-            orderBy: orderByArg,
-            orderDir: orderDirArg,
-            filters: activeFilters,
-          }),
-        ])
-        setSchema(schemaRes)
-        setSummary(summaryRes.columns || [])
-        setRows(dataRes.rows || [])
-      } catch (e) {
-        setError({ scope: 'table', message: friendlyError(e.message) })
-      } finally {
-        setRunning(false)
-      }
-    },
-    []
-  )
+  const loadTable = useCallback(async (dataset, table, pageArg, obArg, odArg, activeFilters) => {
+    setRunning(true); setError(null)
+    try {
+      const [sr, smr, dr] = await Promise.all([
+        api.getSchema(dataset, table),
+        api.getSummary(dataset, table),
+        api.getData(dataset, table, {
+          limit: PAGE_SIZE,
+          offset: pageArg * PAGE_SIZE,
+          orderBy: obArg,
+          orderDir: odArg,
+          filters: activeFilters,
+        }),
+      ])
+      setSchema(sr)
+      setSummary(smr.columns || [])
+      setRows(dr.rows || [])
+    } catch (e) { setError({ scope: 'table', message: friendlyError(e.message) }) }
+    finally { setRunning(false) }
+  }, [])
 
   // -------------------------------------------------------------------------
   // Effects
   // -------------------------------------------------------------------------
-  useEffect(() => {
-    loadDatasets()
-  }, [loadDatasets])
+  useEffect(() => { loadDatasets() }, [loadDatasets])
 
   useEffect(() => {
     if (!selectedDataset) {
-      setSelectedTable(null)
-      setTables([])
-      setSchema(null)
-      setSummary(null)
-      setRows(null)
-      setFilters({})
-      setFilterOptions({})
-      setFilterFields([])
+      setSelectedTable(null); setTables([]); setSchema(null); setSummary(null)
+      setRows(null); setFilters({}); setFilterOptions({}); setFilterFields([])
       return
     }
-    setSelectedTable(null)
-    setTables([])
-    setSchema(null)
-    setSummary(null)
-    setRows(null)
-    setFilters({})
-    setFilterOptions({})
-    setFilterFields([])
+    setSelectedTable(null); setTables([]); setSchema(null); setSummary(null)
+    setRows(null); setFilters({}); setFilterOptions({}); setFilterFields([])
     loadTables(selectedDataset)
   }, [selectedDataset, loadTables])
 
   useEffect(() => {
     if (selectedDataset && selectedTable) {
-      setPage(0)
-      setOrderBy(null)
-      setOrderDir('ASC')
-      setFilters({})
-      setFilterOptions({})
+      setPage(0); setOrderBy(null); setOrderDir('ASC'); setFilters({}); setFilterOptions({})
       loadTable(selectedDataset, selectedTable, 0, null, 'ASC', {})
     }
   }, [selectedDataset, selectedTable, loadTable])
 
-  // Once filterFields are known for a table, load initial options (no parent filters yet)
+  // Once filterFields are known, load initial options (no parent filters yet)
   useEffect(() => {
-    if (selectedDataset && selectedTable && filterFields.length > 0) {
+    if (selectedDataset && selectedTable && filterFields.length > 0)
       loadFilterOptions(selectedDataset, selectedTable, {}, filterFields)
-    }
   }, [filterFields, selectedDataset, selectedTable, loadFilterOptions])
 
   // -------------------------------------------------------------------------
@@ -598,14 +476,13 @@ export default function App() {
   // -------------------------------------------------------------------------
   const activeFilterCount = useMemo(() => Object.values(filters).filter(Boolean).length, [filters])
 
-  // Client-side filter of loaded rows (for instant feedback while BQ fetches)
+  // Client-side pass to give instant visual feedback while BQ fetches
   const filteredRows = useMemo(() => {
     if (!rows) return []
     return rows.filter((row) =>
-      Object.entries(filters).every(([key, value]) => {
-        if (!value) return true
-        return String(row?.[key] ?? '').toLowerCase() === String(value).toLowerCase()
-      })
+      Object.entries(filters).every(([k, v]) =>
+        !v || String(row?.[k] ?? '').toLowerCase() === String(v).toLowerCase()
+      )
     )
   }, [rows, filters])
 
@@ -615,46 +492,46 @@ export default function App() {
   }, [activeFilterCount, filteredRows, schema, summary])
 
   const plainSummary = useMemo(() => buildPlainSummary({
-    columns: chartColumns,
-    filteredRows: activeFilterCount > 0 ? filteredRows : rows || [],
-    schema,
-    filterFields,
-    filters,
+    cols: chartColumns,
+    rows: activeFilterCount > 0 ? filteredRows : rows || [],
+    schema, fields: filterFields, filters,
   }), [activeFilterCount, chartColumns, filterFields, filteredRows, filters, rows, schema])
 
   // -------------------------------------------------------------------------
   // Handlers
   // -------------------------------------------------------------------------
   const handleFilterChange = useCallback((key, value) => {
-    setFilters((current) => {
-      const next = { ...current, [key]: value }
+    // Compute next filter state (with cascade resets applied)
+    setFilters((prev) => {
+      const next = { ...prev, [key]: value }
 
-      // Cascading reset: if the changed field is a parent, check children
+      // Cascade: if the changed field is a parent, reset invalid children
       KNOWN_FILTER_FIELDS.forEach((field) => {
-        const parentKey = CHILD_OF[field.key]
-        if (parentKey === key) {
-          // The parent changed — reset child if its current value
-          // is no longer in the options for the new parent value
-          const childOptions = filterOptions[field.key] || []
-          const childCurrentValue = next[field.key]
-          if (childCurrentValue && !childOptions.some(
-            (opt) => String(opt).toLowerCase() === String(childCurrentValue).toLowerCase()
+        if (CHILD_OF[field.key] === key) {
+          const childOpts = filterOptions[field.key] || []
+          const childVal  = next[field.key]
+          // Reset child only when a new (non-empty) parent value is chosen
+          // and the child's current value is no longer in the narrowed options
+          if (value && childVal && !childOpts.some(
+            (opt) => String(opt).toLowerCase() === String(childVal).toLowerCase()
           )) {
             next[field.key] = ''
           }
         }
       })
 
-      // Re-fetch filter options to cascade (e.g. new zone → new district options)
-      if (selectedDataset && selectedTable && filterFields.length > 0) {
-        loadFilterOptions(selectedDataset, selectedTable, next, filterFields)
-      }
-
-      // Re-fetch data from BigQuery with updated filters as WHERE params
-      if (selectedDataset && selectedTable) {
-        setPage(0)
-        loadTable(selectedDataset, selectedTable, 0, orderBy, orderDir, next)
-      }
+      // Fire async side-effects using the computed next state.
+      // Wrapping in setTimeout(0) ensures we're outside the React batched update.
+      setTimeout(() => {
+        // Re-fetch dropdown options so child dropdowns cascade (zone → district)
+        if (selectedDataset && selectedTable && filterFields.length > 0)
+          loadFilterOptions(selectedDataset, selectedTable, next, filterFields)
+        // Re-fetch rows from BigQuery with the updated WHERE params
+        if (selectedDataset && selectedTable) {
+          setPage(0)
+          loadTable(selectedDataset, selectedTable, 0, orderBy, orderDir, next)
+        }
+      }, 0)
 
       return next
     })
@@ -662,26 +539,23 @@ export default function App() {
 
   const clearFilters = useCallback(() => {
     setFilters({})
-    if (selectedDataset && selectedTable && filterFields.length > 0) {
+    if (selectedDataset && selectedTable && filterFields.length > 0)
       loadFilterOptions(selectedDataset, selectedTable, {}, filterFields)
-    }
     if (selectedDataset && selectedTable) {
       setPage(0)
       loadTable(selectedDataset, selectedTable, 0, orderBy, orderDir, {})
     }
   }, [selectedDataset, selectedTable, filterFields, loadFilterOptions, loadTable, orderBy, orderDir])
 
-  const handlePageChange = (nextPage) => {
-    setPage(nextPage)
-    loadTable(selectedDataset, selectedTable, nextPage, orderBy, orderDir, filters)
+  const handlePageChange = (next) => {
+    setPage(next)
+    loadTable(selectedDataset, selectedTable, next, orderBy, orderDir, filters)
   }
 
-  const handleSort = (column) => {
-    const direction = orderBy === column && orderDir === 'ASC' ? 'DESC' : 'ASC'
-    setOrderBy(column)
-    setOrderDir(direction)
-    setPage(0)
-    loadTable(selectedDataset, selectedTable, 0, column, direction, filters)
+  const handleSort = (col) => {
+    const dir = orderBy === col && orderDir === 'ASC' ? 'DESC' : 'ASC'
+    setOrderBy(col); setOrderDir(dir); setPage(0)
+    loadTable(selectedDataset, selectedTable, 0, col, dir, filters)
   }
 
   const retryCurrentView = () => {
@@ -691,13 +565,9 @@ export default function App() {
   }
 
   const refreshCurrentView = () => {
-    if (selectedDataset && selectedTable) {
-      loadTable(selectedDataset, selectedTable, page, orderBy, orderDir, filters)
-    } else if (selectedDataset) {
-      loadTables(selectedDataset)
-    } else {
-      loadDatasets()
-    }
+    if (selectedDataset && selectedTable) loadTable(selectedDataset, selectedTable, page, orderBy, orderDir, filters)
+    else if (selectedDataset) loadTables(selectedDataset)
+    else loadDatasets()
   }
 
   const hasDataView = Boolean(rows)
@@ -713,61 +583,35 @@ export default function App() {
 
         {error && (
           <div className="mt-6">
-            <StatePanel
-              title="The live farm data did not refresh"
-              body={error.message}
-              actionLabel="Try again"
-              onAction={retryCurrentView}
-              tone="error"
-            />
+            <StatePanel title="The live farm data did not refresh" body={error.message} actionLabel="Try again" onAction={retryCurrentView} tone="error" />
           </div>
         )}
 
         <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-3">
+          {/* ---- Left: filters + data ---- */}
           <div className="space-y-6 lg:col-span-2">
             <FilterBar
-              datasets={datasets}
-              tables={tables}
-              selectedDataset={selectedDataset}
-              selectedTable={selectedTable}
-              filters={filters}
-              filterFields={filterFields}
-              filterOptions={filterOptions}
-              loadingFilterOptions={loadingFilterOptions}
-              loadingDatasets={loadingDatasets}
-              loadingTables={loadingTables}
+              datasets={datasets} tables={tables}
+              selectedDataset={selectedDataset} selectedTable={selectedTable}
+              filters={filters} filterFields={filterFields}
+              filterOptions={filterOptions} loadingFilterOptions={loadingFilterOptions}
+              loadingDatasets={loadingDatasets} loadingTables={loadingTables}
               running={running}
-              onSelectDataset={setSelectedDataset}
-              onSelectTable={setSelectedTable}
-              onFilterChange={handleFilterChange}
-              onClearFilters={clearFilters}
+              onSelectDataset={setSelectedDataset} onSelectTable={setSelectedTable}
+              onFilterChange={handleFilterChange} onClearFilters={clearFilters}
               onRefresh={refreshCurrentView}
             />
 
             {running && !rows && (
-              <StatePanel
-                title="Opening the latest field records"
-                body="The dashboard is pulling the schema, summary, and first page of rows from BigQuery."
-                actionLabel="Refresh"
-                onAction={refreshCurrentView}
-              />
+              <StatePanel title="Opening the latest field records" body="Pulling schema, summary, and rows from BigQuery." actionLabel="Refresh" onAction={refreshCurrentView} />
             )}
-
             {!selectedDataset && !running && !rows && (
-              <StatePanel
-                title="Start with a dataset"
-                body="Choose a dataset in the filter card to see tables, farm highlights, charts, and rows."
-                actionLabel="Refresh datasets"
-                onAction={loadDatasets}
-              />
+              <StatePanel title="Start with a dataset" body="Choose a dataset to see tables, charts, and rows." actionLabel="Refresh datasets" onAction={loadDatasets} />
             )}
-
             {selectedDataset && !selectedTable && !running && !rows && (
               <StatePanel
                 title="Now choose a table"
-                body={tables.length > 0
-                  ? 'Pick one table from this dataset to build the farmer view.'
-                  : 'No tables are showing for this dataset yet. Refresh the list and check the live connection.'}
+                body={tables.length > 0 ? 'Pick one table from this dataset to build the farm view.' : 'No tables found. Refresh the list and check the live connection.'}
                 actionLabel="Refresh tables"
                 onAction={() => loadTables(selectedDataset)}
               />
@@ -776,39 +620,31 @@ export default function App() {
             {hasDataView && (
               <>
                 <PlainSummary summary={plainSummary} />
-
                 {summary && <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />}
-
                 {!hasRows && (
                   <StatePanel
                     title={activeFilterCount > 0 ? 'No loaded records match those filters' : 'This table page is empty'}
-                    body={activeFilterCount > 0
-                      ? 'Clear a filter or move through the table pages to keep checking the live records.'
-                      : 'The live table returned no rows for this page. Refresh the view to check again.'}
+                    body={activeFilterCount > 0 ? 'Clear a filter or move through the table pages.' : 'The live table returned no rows for this page.'}
                     actionLabel={activeFilterCount > 0 ? 'Clear filters' : 'Refresh table'}
                     onAction={activeFilterCount > 0 ? clearFilters : refreshCurrentView}
                   />
                 )}
-
                 <DataTable
                   rows={filteredRows}
                   columns={rows?.[0] ? Object.keys(rows[0]) : undefined}
-                  page={page}
-                  pageSize={PAGE_SIZE}
-                  sourceRowCount={rows.length}
-                  matchingRowCount={filteredRows.length}
+                  page={page} pageSize={PAGE_SIZE}
+                  sourceRowCount={rows.length} matchingRowCount={filteredRows.length}
                   activeFilters={activeFilterCount}
                   onPageChange={canUseTableControls ? handlePageChange : undefined}
-                  orderBy={orderBy}
-                  orderDir={orderDir}
+                  orderBy={orderBy} orderDir={orderDir}
                   onSort={canUseTableControls ? handleSort : undefined}
-                  onRetry={refreshCurrentView}
-                  onClearFilters={clearFilters}
+                  onRetry={refreshCurrentView} onClearFilters={clearFilters}
                 />
               </>
             )}
           </div>
 
+          {/* ---- Right: KPI cards ---- */}
           <aside className="lg:col-span-1">
             <div className="space-y-6 lg:sticky lg:top-6">
               {schema && (

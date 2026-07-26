@@ -137,7 +137,7 @@ def get_filter_options(
     table_id: str,
     fields: list[str],
     parent_filters: dict,
-    max_values: int = 200,
+    max_values: int = 2000,
 ):
     """Return distinct values for each requested field, filtered by any already-set
     parent selections (e.g. zone filters the district_name options).
