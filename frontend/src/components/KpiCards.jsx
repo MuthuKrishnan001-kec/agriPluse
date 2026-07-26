@@ -1,8 +1,11 @@
-function Card({ label, value, accent }) {
+function Card({ label, value, accent, icon }) {
   return (
-    <div className="border border-border rounded-lg bg-panel px-5 py-4 flex-1 min-w-[140px]">
-      <div className="text-[11px] uppercase tracking-[0.2em] text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-2xl font-semibold ${accent || 'text-ink'}`}>{value}</div>
+    <div className="min-w-[150px] flex-1 rounded-[24px] border border-border/70 bg-soil/80 p-4 shadow-soft">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted">{label}</div>
+        <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-earth/70 text-lg">{icon}</div>
+      </div>
+      <div className={`mt-4 text-2xl font-semibold ${accent || 'text-linen'}`}>{value}</div>
     </div>
   )
 }
@@ -14,11 +17,11 @@ export default function KpiCards({ schema }) {
   ).length
 
   return (
-    <div className="flex flex-wrap gap-3">
-      <Card label="Rows" value={schema.num_rows?.toLocaleString() ?? '—'} accent="text-amber" />
-      <Card label="Size" value={schema.num_bytes ? `${(schema.num_bytes / 1e6).toFixed(1)} MB` : '—'} accent="text-teal" />
-      <Card label="Columns" value={schema.fields.length} />
-      <Card label="Numeric fields" value={numericCount} />
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Card label="Live rows" value={schema.num_rows?.toLocaleString() ?? '—'} accent="text-wheat" icon="📊" />
+      <Card label="Data size" value={schema.num_bytes ? `${(schema.num_bytes / 1e6).toFixed(1)} MB` : '—'} accent="text-crop" icon="🧺" />
+      <Card label="Fields" value={schema.fields.length} accent="text-accent" icon="🧾" />
+      <Card label="Number fields" value={numericCount} accent="text-linen" icon="🔢" />
     </div>
   )
 }

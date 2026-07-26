@@ -8,6 +8,31 @@ import QueryConsole from './components/QueryConsole'
 
 const PAGE_SIZE = 25
 
+function getStatusCopy({ running, error, selectedDataset, selectedTable }) {
+  if (running) {
+    return {
+      title: 'Gathering the latest field numbers…',
+      body: 'We are pulling fresh records so the cards and charts stay current.',
+    }
+  }
+  if (error) {
+    return {
+      title: 'We hit a snag pulling fresh data',
+      body: error,
+    }
+  }
+  if (selectedDataset && selectedTable) {
+    return {
+      title: 'Ready for a quick check',
+      body: 'Scan the highlights below, then open the advanced box for a custom query when you need it.',
+    }
+  }
+  return {
+    title: 'Choose a record set to begin',
+    body: 'Pick a dataset from the left to see the latest farm information in a simple, glanceable view.',
+  }
+}
+
 export default function App() {
   const [datasets, setDatasets] = useState([])
   const [tables, setTables] = useState([])
@@ -86,6 +111,7 @@ export default function App() {
       setRows(res.rows)
       setSchema(null)
       setSummary(null)
+      setPage(0)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -93,57 +119,84 @@ export default function App() {
     }
   }
 
+  const status = getStatusCopy({ running, error, selectedDataset, selectedTable })
+
   return (
-    <div className="min-h-screen flex bg-base text-ink font-sans">
-      <Sidebar
-        datasets={datasets}
-        tables={tables}
-        selectedDataset={selectedDataset}
-        selectedTable={selectedTable}
-        onSelectDataset={setSelectedDataset}
-        onSelectTable={setSelectedTable}
-      />
+    <div className="min-h-screen bg-earth text-linen font-sans">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col md:flex-row">
+        <Sidebar
+          datasets={datasets}
+          tables={tables}
+          selectedDataset={selectedDataset}
+          selectedTable={selectedTable}
+          onSelectDataset={setSelectedDataset}
+          onSelectTable={setSelectedTable}
+        />
 
-      <main className="flex-1 px-6 py-6 space-y-5 max-w-[1400px]">
-        <header className="flex items-baseline justify-between">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              {selectedDataset && selectedTable
-                ? <span className="font-mono text-amber">{selectedDataset}.{selectedTable}</span>
-                : 'Select a table to explore'}
-            </h1>
-            <p className="text-xs text-muted mt-0.5">Live read from BigQuery — nothing cached, every panel is a real query.</p>
+        <main className="flex-1 px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
+          <header className="rounded-[30px] border border-border/70 bg-soil/90 p-5 shadow-soft furrow-sheen sm:p-6">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+              <div className="max-w-2xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-crop/30 bg-crop/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-crop">
+                  <span>🌾</span>
+                  agriPulse
+                </div>
+                <h1 className="mt-3 font-display text-3xl leading-tight text-linen sm:text-4xl">
+                  {selectedDataset && selectedTable
+                    ? `Live view for ${selectedDataset}.${selectedTable}`
+                    : 'Your latest field story, at a glance'}
+                </h1>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-linen/80 sm:text-base">
+                  Read farm data in plain language, spot changes quickly, and open the advanced box when you want to run a custom check.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-border/80 bg-earth/70 px-4 py-3 text-sm text-linen/80">
+                <div className="font-semibold text-linen">{status.title}</div>
+                <p className="mt-1 max-w-sm text-sm leading-6">{status.body}</p>
+              </div>
+            </div>
+          </header>
+
+          <div className="mt-5 space-y-4">
+            <QueryConsole lastSql={lastSql} onRun={handleRunSql} running={running} />
+
+            {error && (
+              <div className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
+                <div className="font-semibold">We could not refresh this view</div>
+                <p className="mt-1 leading-6">{error}</p>
+              </div>
+            )}
+
+            {running && !schema && !summary && !rows && (
+              <div className="rounded-2xl border border-border/70 bg-soil/70 px-4 py-4 text-sm text-linen/80">
+                <div className="font-semibold text-linen">Checking the latest field records…</div>
+                <p className="mt-1">This only takes a moment while we pull the freshest data.</p>
+              </div>
+            )}
+
+            {schema && <KpiCards schema={schema} />}
+            {summary && <ChartGrid columns={summary} />}
+            {(rows || (!selectedDataset && !rows)) && (
+              <DataTable
+                rows={rows || []}
+                page={page}
+                pageSize={PAGE_SIZE}
+                onPageChange={handlePageChange}
+                orderBy={orderBy}
+                orderDir={orderDir}
+                onSort={selectedDataset && selectedTable ? handleSort : undefined}
+              />
+            )}
+
+            {!selectedDataset && !rows && !running && (
+              <div className="rounded-[24px] border border-dashed border-border bg-soil/60 px-6 py-10 text-center text-sm text-linen/70">
+                Pick a record set from the left to start exploring your field data.
+              </div>
+            )}
           </div>
-        </header>
-
-        <QueryConsole lastSql={lastSql} onRun={handleRunSql} running={running} />
-
-        {error && (
-          <div className="border border-rose/40 bg-rose/10 text-rose text-sm rounded-lg px-4 py-2 font-mono">
-            {error}
-          </div>
-        )}
-
-        {schema && <KpiCards schema={schema} />}
-        {summary && <ChartGrid columns={summary} />}
-        {rows && (
-          <DataTable
-            rows={rows}
-            page={page}
-            pageSize={PAGE_SIZE}
-            onPageChange={handlePageChange}
-            orderBy={orderBy}
-            orderDir={orderDir}
-            onSort={selectedDataset && selectedTable ? handleSort : undefined}
-          />
-        )}
-
-        {!selectedDataset && (
-          <div className="text-sm text-muted border border-dashed border-border rounded-lg px-5 py-10 text-center">
-            Pick a dataset from the sidebar, or run a custom SELECT above to explore any table.
-          </div>
-        )}
-      </main>
+        </main>
+      </div>
     </div>
   )
 }
