@@ -89,6 +89,34 @@ function countBy(values) {
   }, new Map())
 }
 
+// Helper to bucket numeric values into equal ranges
+function bucketValues(values, bucketCount = 10) {
+  const nums = values.map(Number).filter(Number.isFinite)
+  if (!nums.length) return []
+  const min = Math.min(...nums)
+  const max = Math.max(...nums)
+  const range = max - min || 1
+  const step = range / bucketCount
+  const buckets = []
+  for (let i = 0; i < bucketCount; i++) {
+    const lo = min + i * step
+    const hi = i === bucketCount - 1 ? max : lo + step
+    buckets.push({
+      bucket: `${formatCompactNumber(lo)}-${formatCompactNumber(hi)}`,
+      count: 0,
+      sumProduction: 0,
+      sumYield: 0,
+      sumArea: 0,
+    })
+  }
+  nums.forEach((v) => {
+    const i = Math.min(bucketCount - 1, Math.floor(((v - min) / range) * bucketCount))
+    buckets[i].count++
+  })
+  return buckets
+}
+
+
 function summarizeRowsForCharts(refCols, rows, schema, metricKey = 'record_count') {
   if (!refCols?.length || !rows) return []
   const byName = new Map((schema?.fields || []).map((f) => [f.name, f]))
@@ -106,7 +134,7 @@ function summarizeRowsForCharts(refCols, rows, schema, metricKey = 'record_count
         sums.set(key, (sums.get(key) || 0) + (Number.isFinite(metric) ? metric : 0))
       })
       const trend = Array.from(sums.entries())
-        .map(([yr, total]) => ({ year: yr, count: total }))
+        .map(([yr, total]) => ({ year: yr, totalMetric: total }))
         .sort((a, b) => {
           if (typeof a.year === 'number' && typeof b.year === 'number') return a.year - b.year
           return String(a.year).localeCompare(String(b.year))
@@ -114,22 +142,32 @@ function summarizeRowsForCharts(refCols, rows, schema, metricKey = 'record_count
       return { ...col, type: 'year', trend }
     }
     if (type === 'numeric') {
-      const nums = vals.map(d => d.val).map(Number).filter(Number.isFinite)
-      if (!nums.length) return { ...col, histogram: [], non_null: 0 }
-      const min = Math.min(...nums), max = Math.max(...nums)
-      const avg = nums.reduce((s, v) => s + v, 0) / nums.length
-      const bc = min === max ? 1 : 10
-      const buckets = Array.from({ length: bc }, (_, i) => ({
-        bucket: min === max
+      // Use the chosen numeric metric (e.g., production, yield) for aggregation
+      const metricName = numericMetric?.name;
+      // Extract numeric values and associated metric values
+      const dataPoints = vals.filter(d => Number.isFinite(Number(d.val)) && Number.isFinite(d.metric))
+        .map(d => ({ val: Number(d.val), metric: d.metric }));
+      if (!dataPoints.length) return { ...col, histogram: [], non_null: 0 };
+      const nums = dataPoints.map(d => d.val);
+      const min = Math.min(...nums), max = Math.max(...nums);
+      const avg = nums.reduce((s, v) => s + v, 0) / nums.length;
+      const bucketCount = min === max ? 1 : 10;
+      const buckets = Array.from({ length: bucketCount }, (_, i) => {
+        const bucketLabel = min === max
           ? formatShortNumber(min)
-          : `${formatShortNumber(min + ((max - min) / bc) * i)}-${formatShortNumber(min + ((max - min) / bc) * (i + 1))}`,
-        count: 0,
-      }))
-      nums.forEach((v) => {
-        const i = min === max ? 0 : Math.min(bc - 1, Math.floor(((v - min) / (max - min)) * bc))
-        buckets[i].count += 1
-      })
-      return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets }
+          : `${formatShortNumber(min + ((max - min) / bucketCount) * i)}-${formatShortNumber(min + ((max - min) / bucketCount) * (i + 1))}`;
+        return {
+          bucket: bucketLabel,
+          count: 0,
+          sumMetric: 0,
+        };
+      });
+      dataPoints.forEach(({ val, metric }) => {
+        const idx = min === max ? 0 : Math.min(bucketCount - 1, Math.floor(((val - min) / (max - min)) * bucketCount));
+        buckets[idx].count += 1;
+        buckets[idx].sumMetric += metric;
+      });
+      return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets };
     }
     if (type === 'categorical') {
       const top = Array.from(vals.reduce((acc, { val, metric }) => {

@@ -122,8 +122,8 @@ const CustomTooltip = ({ active, payload, label, chartType }) => {
           <div>
             <div className="font-semibold text-wheat mb-1">Range: {data.bucket}</div>
             <div className="flex justify-between gap-4">
-              <span className="text-linen/70">Count:</span>
-              <span className="font-mono font-semibold">{formatNumber(data.count)} records</span>
+              <span className="text-linen/70">Total:</span>
+              <span className="font-mono font-semibold">{formatNumber(data.sumMetric)}</span>
             </div>
           </div>
         )}
@@ -149,8 +149,8 @@ const CustomTooltip = ({ active, payload, label, chartType }) => {
           <div>
             <div className="font-semibold text-wheat mb-1">Year: {data.year}</div>
             <div className="flex justify-between gap-4">
-              <span className="text-linen/70">Count:</span>
-              <span className="font-mono font-semibold">{formatNumber(data.count)} records</span>
+              <span className="text-linen/70">Total:</span>
+              <span className="font-mono font-semibold">{formatNumber(data.totalMetric)}</span>
             </div>
           </div>
         )}
@@ -177,7 +177,7 @@ function NumericChart({ column }) {
           <XAxis dataKey="bucket" tick={AXIS_STYLE} axisLine={false} tickLine={false} interval="preserveStartEnd" tickFormatter={(value) => trimLabel(value, 12)} />
           <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={45} tickFormatter={formatCompactNumber} />
           <Tooltip content={<CustomTooltip chartType="numeric" />} cursor={{ fill: `${COLORS.border}66` }} />
-          <Bar dataKey="count" fill={COLORS.wheat} radius={[4, 4, 0, 0]} />
+          <Bar dataKey="sumMetric" fill={COLORS.wheat} radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>
@@ -219,7 +219,7 @@ function YearChart({ column }) {
   const handleClick = (state) => {
     const payload = state?.activePayload?.[0]?.payload
     if (!payload) return
-    setDetail({ label: String(payload.year), value: `${formatNumber(payload.count)} records` })
+    setDetail({ label: String(payload.year), value: `${formatNumber(payload.totalMetric)}` })
   }
 
   return (
@@ -230,7 +230,7 @@ function YearChart({ column }) {
           <XAxis dataKey="year" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
           <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={45} tickFormatter={formatCompactNumber} />
           <Tooltip content={<CustomTooltip chartType="year" />} />
-          <Line type="monotone" dataKey="count" stroke={COLORS.accent} strokeWidth={3} dot={{ r: 4, fill: COLORS.accent }} activeDot={{ r: 7, fill: COLORS.wheat, stroke: COLORS.earth, strokeWidth: 2 }} />
+          <Line type="monotone" dataKey="totalMetric" stroke={COLORS.accent} strokeWidth={3} dot={{ r: 4, fill: COLORS.accent }} activeDot={{ r: 7, fill: COLORS.wheat, stroke: COLORS.earth, strokeWidth: 2 }} />
         </LineChart>
       </ResponsiveContainer>
     </ChartCard>
