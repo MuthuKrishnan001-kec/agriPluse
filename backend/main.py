@@ -91,16 +91,70 @@ def table_data(
     offset: int = Query(0, ge=0),
     order_by: str | None = None,
     order_dir: str = "ASC",
+    # Cascading filter params — all optional
+    zone: str | None = Query(None),
+    district_name: str | None = Query(None),
+    crop: str | None = Query(None),
+    season: str | None = Query(None),
+    soil_type: str | None = Query(None),
+    year: str | None = Query(None),
 ):
+    filters = {
+        "zone": zone,
+        "district_name": district_name,
+        "crop": crop,
+        "season": season,
+        "soil_type": soil_type,
+        "year": year,
+    }
+    # Use filtered query whenever at least one filter is active
+    has_filters = any(v for v in filters.values() if v)
     try:
-        rows = bq.get_table_data(
-            dataset_id, table_id, limit, offset, order_by, order_dir
-        )
+        if has_filters:
+            rows = bq.get_table_data_filtered(
+                dataset_id, table_id, filters, limit, offset, order_by, order_dir
+            )
+        else:
+            rows = bq.get_table_data(
+                dataset_id, table_id, limit, offset, order_by, order_dir
+            )
         return {"rows": rows, "limit": limit, "offset": offset}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/datasets/{dataset_id}/tables/{table_id}/filter-options")
+def filter_options(
+    dataset_id: str,
+    table_id: str,
+    fields: str = Query(..., description="Comma-separated list of field names to fetch options for"),
+    # Optional parent filter context — values already chosen by the user
+    zone: str | None = Query(None),
+    district_name: str | None = Query(None),
+    crop: str | None = Query(None),
+    season: str | None = Query(None),
+    soil_type: str | None = Query(None),
+    year: str | None = Query(None),
+):
+    """Return distinct non-empty values for the requested fields, narrowed by any
+    parent filter selections already made (e.g. zone constrains district_name)."""
+    requested_fields = [f.strip() for f in fields.split(",") if f.strip()]
+    parent_filters = {
+        "zone": zone,
+        "district_name": district_name,
+        "crop": crop,
+        "season": season,
+        "soil_type": soil_type,
+        "year": year,
+    }
+    try:
+        options = bq.get_filter_options(dataset_id, table_id, requested_fields, parent_filters)
+        return {"options": options}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.get("/api/datasets/{dataset_id}/tables/{table_id}/summary")

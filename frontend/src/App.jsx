@@ -1,30 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
 import KpiCards from './components/KpiCards'
 import ChartGrid from './components/ChartGrid'
 import DataTable from './components/DataTable'
-import QueryConsole from './components/QueryConsole'
 
 const PAGE_SIZE = 25
-const MAX_FILTER_VALUES = 40
+
+// The six known cascading filter fields, in hierarchy order.
+// Zone is the parent of District; the rest are independent.
+const KNOWN_FILTER_FIELDS = [
+  { key: 'zone',          label: 'Zone',          priority: 1 },
+  { key: 'district_name', label: 'District Name',  priority: 2 },
+  { key: 'crop',          label: 'Crop',           priority: 3 },
+  { key: 'season',        label: 'Season',         priority: 4 },
+  { key: 'soil_type',     label: 'Soil Type',      priority: 5 },
+  { key: 'year',          label: 'Year',           priority: 6 },
+]
+
+// district_name is the child of zone — when zone changes, district must be re-validated
+const CHILD_OF = { district_name: 'zone' }
 
 const NUMERIC_TYPES = new Set(['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC'])
 const TEMPORAL_TYPES = new Set(['DATE', 'DATETIME', 'TIMESTAMP'])
-
-const FILTER_HINTS = [
-  { priority: 1, words: ['district', 'zone', 'region', 'state', 'county', 'taluk', 'mandal', 'block', 'village'] },
-  { priority: 2, words: ['crop', 'commodity', 'variety', 'cultivar'] },
-  { priority: 3, words: ['season', 'month', 'quarter'] },
-  { priority: 4, words: ['soil', 'irrigation', 'land', 'farm_type'] },
-  { priority: 5, words: ['year', 'harvest_year', 'crop_year'] },
-]
-
-function normalizeName(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-}
 
 function humanizeName(value) {
   return String(value || '')
@@ -67,75 +64,11 @@ function getSummaryType(field, columnSummary) {
   return 'other'
 }
 
-function getFilterHint(fieldName) {
-  const normalized = normalizeName(fieldName)
-  return FILTER_HINTS.find((hint) =>
-    hint.words.some((word) => normalized === word || normalized.includes(`_${word}`) || normalized.includes(`${word}_`) || normalized.includes(word))
-  )
-}
-
 function sortFilterValues(a, b) {
   const left = Number(a)
   const right = Number(b)
   if (Number.isFinite(left) && Number.isFinite(right)) return left - right
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
-}
-
-function collectFilterValues(columnName, columnSummary, rows) {
-  const values = new Set()
-
-  columnSummary?.top_values?.forEach((entry) => {
-    if (entry?.value !== null && entry?.value !== undefined && entry.value !== '') {
-      values.add(String(entry.value))
-    }
-  })
-
-  rows?.forEach((row) => {
-    const value = row?.[columnName]
-    if (value !== null && value !== undefined && value !== '') {
-      values.add(String(value))
-    }
-  })
-
-  return Array.from(values).sort(sortFilterValues).slice(0, MAX_FILTER_VALUES)
-}
-
-function buildFilterFields(schema, summary, rows) {
-  const summaryByName = new Map((summary || []).map((column) => [column.name, column]))
-  const schemaFields = schema?.fields?.length
-    ? schema.fields
-    : Object.keys(rows?.[0] || {}).map((name) => ({ name, type: undefined }))
-
-  return schemaFields
-    .map((field, index) => {
-      const columnSummary = summaryByName.get(field.name)
-      const type = getSummaryType(field, columnSummary)
-      const hint = getFilterHint(field.name)
-      const isYear = normalizeName(field.name).includes('year')
-      const isUsefulType = type === 'categorical' || type === 'temporal' || isYear || (!field.type && hint)
-
-      if (!hint || !isUsefulType) return null
-
-      const values = collectFilterValues(field.name, columnSummary, rows)
-      if (values.length === 0) return null
-
-      return {
-        key: field.name,
-        label: humanizeName(field.name),
-        values,
-        priority: hint.priority,
-        order: index,
-      }
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.priority - b.priority || a.order - b.order)
-    .slice(0, 6)
-}
-
-function getFilterLabel(filterFields, filters) {
-  const active = filterFields.filter((field) => filters[field.key])
-  if (active.length === 0) return 'All records in the current view are included.'
-  return `Filtered by ${active.map((field) => `${field.label}: ${filters[field.key]}`).join(', ')}.`
 }
 
 function countBy(values) {
@@ -224,6 +157,12 @@ function chooseDimension(filterFields) {
   )
 }
 
+function getFilterLabel(filterFields, filters) {
+  const active = filterFields.filter((field) => filters[field.key])
+  if (active.length === 0) return 'All records in the current view are included.'
+  return `Filtered by ${active.map((field) => `${field.label}: ${filters[field.key]}`).join(', ')}.`
+}
+
 function buildPlainSummary({ columns, filteredRows, schema, filterFields, filters }) {
   const rowCount = filteredRows?.length ?? 0
   const metric = chooseMetricColumn(columns)
@@ -294,6 +233,9 @@ function buildPlainSummary({ columns, filteredRows, schema, filterFields, filter
   }
 }
 
+// ---------------------------------------------------------------------------
+// FilterBar — driven by dynamic options fetched from the backend
+// ---------------------------------------------------------------------------
 function FilterBar({
   datasets,
   tables,
@@ -301,6 +243,8 @@ function FilterBar({
   selectedTable,
   filters,
   filterFields,
+  filterOptions,
+  loadingFilterOptions,
   loadingDatasets,
   loadingTables,
   running,
@@ -318,7 +262,7 @@ function FilterBar({
         <div>
           <h2 className="text-lg font-semibold text-earth">Farm view filters</h2>
           <p className="mt-1 text-sm leading-6 text-earth/70">
-            Pick the live table, then narrow it by the field values found in the schema and summary.
+            Pick the live table, then narrow it by zone, district, crop, and more.
           </p>
         </div>
         <button
@@ -363,21 +307,31 @@ function FilterBar({
           </select>
         </label>
 
-        {filterFields.map((field) => (
-          <label key={field.key} className="flex flex-col gap-2 text-sm text-earth">
-            <span className="font-semibold">{field.label}</span>
-            <select
-              value={filters[field.key] || ''}
-              onChange={(event) => onFilterChange(field.key, event.target.value)}
-              className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              <option value="">All {field.label.toLowerCase()}</option>
-              {field.values.map((value) => (
-                <option key={value} value={value}>{value}</option>
-              ))}
-            </select>
-          </label>
-        ))}
+        {filterFields.map((field) => {
+          const options = filterOptions[field.key] || []
+          const isLoading = loadingFilterOptions
+          return (
+            <label key={field.key} className="flex flex-col gap-2 text-sm text-earth">
+              <span className="font-semibold flex items-center gap-2">
+                {field.label}
+                {isLoading && (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-crop border-t-transparent" aria-label="Loading options" />
+                )}
+              </span>
+              <select
+                value={filters[field.key] || ''}
+                onChange={(event) => onFilterChange(field.key, event.target.value)}
+                disabled={isLoading || options.length === 0}
+                className="min-h-12 rounded-md border border-border/35 bg-linen px-3 py-2 text-base text-earth shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">All {field.label.toLowerCase()}</option>
+                {options.sort(sortFilterValues).map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+          )
+        })}
       </div>
 
       <div className="mt-5 flex flex-col gap-3 border-t border-border/20 pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -389,7 +343,7 @@ function FilterBar({
                 ? `${activeFilterCount} ${activeFilterCount === 1 ? 'filter is' : 'filters are'} active.`
                 : filterFields.length > 0
                   ? 'Use the field filters to narrow the current farm view.'
-                  : 'This table is ready; no common field filters were found in the loaded data.'
+                  : 'This table is ready; no filter fields were detected.'
               : 'Choose a dataset and table to begin.'}
         </p>
         <button
@@ -424,7 +378,7 @@ function Overview({ selectedDataset, selectedTable }) {
       <h1 className="font-display text-3xl font-semibold leading-tight text-earth">Platform overview</h1>
       <p className="mt-1 max-w-3xl text-sm leading-6 text-earth/70 sm:text-base">
         {selectedDataset && selectedTable
-          ? `Reviewing ${selectedDataset}.${selectedTable} with filters, visual summaries, rows, and advanced SQL available when needed.`
+          ? `Reviewing ${selectedDataset}.${selectedTable} with filters, visual summaries, and live rows.`
           : 'Compare crop, season, soil, zone, and yield patterns from live BigQuery records in a field-friendly view.'}
       </p>
     </section>
@@ -463,39 +417,9 @@ function StatePanel({ title, body, actionLabel, onAction, tone = 'neutral' }) {
   )
 }
 
-function LiveStatusCard({ selectedDataset, selectedTable, running, rows, activeFilters }) {
-  return (
-    <section className="rounded-lg border border-border/25 bg-linen p-5 shadow-soft">
-      <h2 className="text-lg font-semibold text-earth">Live status</h2>
-      <p className="mt-1 text-sm leading-6 text-earth/70">
-        {running
-          ? 'Refreshing the current farm view from BigQuery.'
-          : selectedDataset && selectedTable
-            ? 'Ready for review. Use filters on the left for everyday checks.'
-            : 'Choose a dataset and table to open the live dashboard.'}
-      </p>
-      <dl className="mt-4 space-y-3 text-sm">
-        <div className="flex items-center justify-between gap-3 border-t border-border/20 pt-3">
-          <dt className="font-medium text-earth/70">Dataset</dt>
-          <dd className="max-w-[12rem] truncate font-mono text-earth">{selectedDataset || 'Not chosen'}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-3 border-t border-border/20 pt-3">
-          <dt className="font-medium text-earth/70">Table</dt>
-          <dd className="max-w-[12rem] truncate font-mono text-earth">{selectedTable || 'Not chosen'}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-3 border-t border-border/20 pt-3">
-          <dt className="font-medium text-earth/70">Loaded rows</dt>
-          <dd className="font-mono text-earth">{rows ? rows.length.toLocaleString() : 'Not ready'}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-3 border-t border-border/20 pt-3">
-          <dt className="font-medium text-earth/70">Active filters</dt>
-          <dd className="font-mono text-earth">{activeFilters.toLocaleString()}</dd>
-        </div>
-      </dl>
-    </section>
-  )
-}
-
+// ---------------------------------------------------------------------------
+// Main App
+// ---------------------------------------------------------------------------
 export default function App() {
   const [datasets, setDatasets] = useState([])
   const [tables, setTables] = useState([])
@@ -509,13 +433,63 @@ export default function App() {
   const [orderBy, setOrderBy] = useState(null)
   const [orderDir, setOrderDir] = useState('ASC')
 
-  const [lastSql, setLastSql] = useState('')
   const [running, setRunning] = useState(false)
   const [loadingDatasets, setLoadingDatasets] = useState(false)
   const [loadingTables, setLoadingTables] = useState(false)
+  const [loadingFilterOptions, setLoadingFilterOptions] = useState(false)
   const [error, setError] = useState(null)
-  const [filters, setFilters] = useState({})
 
+  // filters: { zone, district_name, crop, season, soil_type, year }
+  const [filters, setFilters] = useState({})
+  // filterOptions: { zone: [...], district_name: [...], ... } — fetched from backend
+  const [filterOptions, setFilterOptions] = useState({})
+  // Which filter fields are actually present in the current table (detected from schema)
+  const [filterFields, setFilterFields] = useState([])
+
+  // Debounce ref so rapid filter changes don't spam the API
+  const filterOptionsFetchRef = useRef(null)
+
+  // -------------------------------------------------------------------------
+  // Detect which KNOWN_FILTER_FIELDS exist in the current table schema
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!schema?.fields?.length) {
+      setFilterFields([])
+      return
+    }
+    const schemaKeys = new Set(schema.fields.map((f) => f.name.toLowerCase()))
+    const present = KNOWN_FILTER_FIELDS.filter((f) => schemaKeys.has(f.key.toLowerCase()))
+    setFilterFields(present)
+  }, [schema])
+
+  // -------------------------------------------------------------------------
+  // Fetch filter options from backend whenever table or filters change
+  // -------------------------------------------------------------------------
+  const loadFilterOptions = useCallback(
+    async (dataset, table, currentFilters, fields) => {
+      if (!dataset || !table || !fields?.length) return
+
+      // Debounce: cancel any pending fetch and wait 120 ms
+      if (filterOptionsFetchRef.current) clearTimeout(filterOptionsFetchRef.current)
+
+      filterOptionsFetchRef.current = setTimeout(async () => {
+        setLoadingFilterOptions(true)
+        try {
+          const result = await api.getFilterOptions(dataset, table, fields.map((f) => f.key), currentFilters)
+          setFilterOptions(result.options || {})
+        } catch {
+          // Silently keep existing options on error
+        } finally {
+          setLoadingFilterOptions(false)
+        }
+      }, 120)
+    },
+    []
+  )
+
+  // -------------------------------------------------------------------------
+  // Data loaders
+  // -------------------------------------------------------------------------
   const loadDatasets = useCallback(async () => {
     setLoadingDatasets(true)
     setError(null)
@@ -543,26 +517,37 @@ export default function App() {
     }
   }, [])
 
-  const loadTable = useCallback(async (dataset, table, pageArg = 0, orderByArg = null, orderDirArg = 'ASC') => {
-    setRunning(true)
-    setError(null)
-    try {
-      const [schemaRes, summaryRes, dataRes] = await Promise.all([
-        api.getSchema(dataset, table),
-        api.getSummary(dataset, table),
-        api.getData(dataset, table, { limit: PAGE_SIZE, offset: pageArg * PAGE_SIZE, orderBy: orderByArg, orderDir: orderDirArg }),
-      ])
-      setSchema(schemaRes)
-      setSummary(summaryRes.columns || [])
-      setRows(dataRes.rows || [])
-      setLastSql(`SELECT * FROM \`${dataset}.${table}\` ${orderByArg ? `ORDER BY ${orderByArg} ${orderDirArg} ` : ''}LIMIT ${PAGE_SIZE} OFFSET ${pageArg * PAGE_SIZE}`)
-    } catch (e) {
-      setError({ scope: 'table', message: friendlyError(e.message) })
-    } finally {
-      setRunning(false)
-    }
-  }, [])
+  const loadTable = useCallback(
+    async (dataset, table, pageArg = 0, orderByArg = null, orderDirArg = 'ASC', activeFilters = {}) => {
+      setRunning(true)
+      setError(null)
+      try {
+        const [schemaRes, summaryRes, dataRes] = await Promise.all([
+          api.getSchema(dataset, table),
+          api.getSummary(dataset, table),
+          api.getData(dataset, table, {
+            limit: PAGE_SIZE,
+            offset: pageArg * PAGE_SIZE,
+            orderBy: orderByArg,
+            orderDir: orderDirArg,
+            filters: activeFilters,
+          }),
+        ])
+        setSchema(schemaRes)
+        setSummary(summaryRes.columns || [])
+        setRows(dataRes.rows || [])
+      } catch (e) {
+        setError({ scope: 'table', message: friendlyError(e.message) })
+      } finally {
+        setRunning(false)
+      }
+    },
+    []
+  )
 
+  // -------------------------------------------------------------------------
+  // Effects
+  // -------------------------------------------------------------------------
   useEffect(() => {
     loadDatasets()
   }, [loadDatasets])
@@ -575,15 +560,18 @@ export default function App() {
       setSummary(null)
       setRows(null)
       setFilters({})
+      setFilterOptions({})
+      setFilterFields([])
       return
     }
-
     setSelectedTable(null)
     setTables([])
     setSchema(null)
     setSummary(null)
     setRows(null)
     setFilters({})
+    setFilterOptions({})
+    setFilterFields([])
     loadTables(selectedDataset)
   }, [selectedDataset, loadTables])
 
@@ -593,20 +581,33 @@ export default function App() {
       setOrderBy(null)
       setOrderDir('ASC')
       setFilters({})
-      loadTable(selectedDataset, selectedTable, 0, null, 'ASC')
+      setFilterOptions({})
+      loadTable(selectedDataset, selectedTable, 0, null, 'ASC', {})
     }
   }, [selectedDataset, selectedTable, loadTable])
 
-  const filterFields = useMemo(() => buildFilterFields(schema, summary, rows), [schema, summary, rows])
+  // Once filterFields are known for a table, load initial options (no parent filters yet)
+  useEffect(() => {
+    if (selectedDataset && selectedTable && filterFields.length > 0) {
+      loadFilterOptions(selectedDataset, selectedTable, {}, filterFields)
+    }
+  }, [filterFields, selectedDataset, selectedTable, loadFilterOptions])
 
+  // -------------------------------------------------------------------------
+  // Derived state
+  // -------------------------------------------------------------------------
+  const activeFilterCount = useMemo(() => Object.values(filters).filter(Boolean).length, [filters])
+
+  // Client-side filter of loaded rows (for instant feedback while BQ fetches)
   const filteredRows = useMemo(() => {
     if (!rows) return []
     return rows.filter((row) =>
-      Object.entries(filters).every(([key, value]) => !value || String(row?.[key] ?? '') === String(value))
+      Object.entries(filters).every(([key, value]) => {
+        if (!value) return true
+        return String(row?.[key] ?? '').toLowerCase() === String(value).toLowerCase()
+      })
     )
   }, [rows, filters])
-
-  const activeFilterCount = useMemo(() => Object.values(filters).filter(Boolean).length, [filters])
 
   const chartColumns = useMemo(() => {
     if (!summary) return []
@@ -621,9 +622,58 @@ export default function App() {
     filters,
   }), [activeFilterCount, chartColumns, filterFields, filteredRows, filters, rows, schema])
 
+  // -------------------------------------------------------------------------
+  // Handlers
+  // -------------------------------------------------------------------------
+  const handleFilterChange = useCallback((key, value) => {
+    setFilters((current) => {
+      const next = { ...current, [key]: value }
+
+      // Cascading reset: if the changed field is a parent, check children
+      KNOWN_FILTER_FIELDS.forEach((field) => {
+        const parentKey = CHILD_OF[field.key]
+        if (parentKey === key) {
+          // The parent changed — reset child if its current value
+          // is no longer in the options for the new parent value
+          const childOptions = filterOptions[field.key] || []
+          const childCurrentValue = next[field.key]
+          if (childCurrentValue && !childOptions.some(
+            (opt) => String(opt).toLowerCase() === String(childCurrentValue).toLowerCase()
+          )) {
+            next[field.key] = ''
+          }
+        }
+      })
+
+      // Re-fetch filter options to cascade (e.g. new zone → new district options)
+      if (selectedDataset && selectedTable && filterFields.length > 0) {
+        loadFilterOptions(selectedDataset, selectedTable, next, filterFields)
+      }
+
+      // Re-fetch data from BigQuery with updated filters as WHERE params
+      if (selectedDataset && selectedTable) {
+        setPage(0)
+        loadTable(selectedDataset, selectedTable, 0, orderBy, orderDir, next)
+      }
+
+      return next
+    })
+  }, [filterOptions, filterFields, selectedDataset, selectedTable, loadFilterOptions, loadTable, orderBy, orderDir])
+
+  const clearFilters = useCallback(() => {
+    setFilters({})
+    if (selectedDataset && selectedTable && filterFields.length > 0) {
+      loadFilterOptions(selectedDataset, selectedTable, {}, filterFields)
+    }
+    if (selectedDataset && selectedTable) {
+      setPage(0)
+      loadTable(selectedDataset, selectedTable, 0, orderBy, orderDir, {})
+    }
+  }, [selectedDataset, selectedTable, filterFields, loadFilterOptions, loadTable, orderBy, orderDir])
+
   const handlePageChange = (nextPage) => {
     setPage(nextPage)
-    loadTable(selectedDataset, selectedTable, nextPage, orderBy, orderDir)
+    loadTable(selectedDataset, selectedTable, nextPage, orderBy, orderDir, filters)
   }
 
   const handleSort = (column) => {
@@ -631,54 +681,22 @@ export default function App() {
     setOrderBy(column)
     setOrderDir(direction)
     setPage(0)
-    loadTable(selectedDataset, selectedTable, 0, column, direction)
-  }
-
-  const handleFilterChange = (key, value) => {
-    setFilters((current) => ({ ...current, [key]: value }))
-  }
-
-  const clearFilters = () => {
-    setFilters({})
+    loadTable(selectedDataset, selectedTable, 0, column, direction, filters)
   }
 
   const retryCurrentView = () => {
-    if (error?.scope === 'datasets' || !selectedDataset) {
-      loadDatasets()
-      return
-    }
-    if (error?.scope === 'tables' || !selectedTable) {
-      loadTables(selectedDataset)
-      return
-    }
-    loadTable(selectedDataset, selectedTable, page, orderBy, orderDir)
+    if (error?.scope === 'datasets' || !selectedDataset) { loadDatasets(); return }
+    if (error?.scope === 'tables' || !selectedTable) { loadTables(selectedDataset); return }
+    loadTable(selectedDataset, selectedTable, page, orderBy, orderDir, filters)
   }
 
   const refreshCurrentView = () => {
     if (selectedDataset && selectedTable) {
-      loadTable(selectedDataset, selectedTable, page, orderBy, orderDir)
+      loadTable(selectedDataset, selectedTable, page, orderBy, orderDir, filters)
     } else if (selectedDataset) {
       loadTables(selectedDataset)
     } else {
       loadDatasets()
-    }
-  }
-
-  const handleRunSql = async (sql) => {
-    setRunning(true)
-    setError(null)
-    setLastSql(sql)
-    try {
-      const result = await api.runQuery(sql)
-      setRows(result.rows || [])
-      setSchema(null)
-      setSummary(null)
-      setFilters({})
-      setPage(0)
-    } catch (e) {
-      setError({ scope: 'query', message: friendlyError(e.message) })
-    } finally {
-      setRunning(false)
     }
   }
 
@@ -714,6 +732,8 @@ export default function App() {
               selectedTable={selectedTable}
               filters={filters}
               filterFields={filterFields}
+              filterOptions={filterOptions}
+              loadingFilterOptions={loadingFilterOptions}
               loadingDatasets={loadingDatasets}
               loadingTables={loadingTables}
               running={running}
@@ -791,24 +811,14 @@ export default function App() {
 
           <aside className="lg:col-span-1">
             <div className="space-y-6 lg:sticky lg:top-6">
-              {schema ? (
+              {schema && (
                 <KpiCards
                   schema={schema}
                   loadedRows={rows.length}
                   matchingRows={filteredRows.length}
                   activeFilters={activeFilterCount}
                 />
-              ) : (
-                <LiveStatusCard
-                  selectedDataset={selectedDataset}
-                  selectedTable={selectedTable}
-                  running={running}
-                  rows={rows}
-                  activeFilters={activeFilterCount}
-                />
               )}
-
-              <QueryConsole lastSql={lastSql} onRun={handleRunSql} running={running} />
             </div>
           </aside>
         </div>

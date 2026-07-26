@@ -78,6 +78,121 @@ def get_table_data(dataset_id: str, table_id: str, limit: int = 100, offset: int
     return [dict(row) for row in rows]
 
 
+# Known filter fields and their column names in BigQuery
+FILTER_FIELDS = ["zone", "district_name", "crop", "season", "soil_type", "year"]
+
+
+def get_table_data_filtered(
+    dataset_id: str,
+    table_id: str,
+    filters: dict,
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str | None = None,
+    order_dir: str = "ASC",
+):
+    """Return rows with an optional WHERE clause built from named BigQuery parameters.
+
+    Each filter uses LOWER(col) = LOWER(@param) for case-insensitive matching
+    so the frontend values don't need to match the exact case stored in BigQuery.
+    """
+    from google.cloud import bigquery as _bq
+
+    client = get_client()
+    limit = min(limit, MAX_ROWS)
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+
+    # Validate optional order_by column
+    order_clause = ""
+    if order_by:
+        schema = get_schema(dataset_id, table_id)
+        valid_cols = {f["name"] for f in schema["fields"]}
+        if order_by not in valid_cols:
+            raise ValueError(f"Unknown column: {order_by}")
+        direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
+        order_clause = f"ORDER BY `{order_by}` {direction}"
+
+    # Build WHERE clause from active filters only
+    active = {k: v for k, v in filters.items() if v and str(v).strip()}
+    where_parts = []
+    query_params = []
+    for field, value in active.items():
+        # Guard against injection by only allowing known field names
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
+            continue
+        param_name = f"filter_{field}"
+        where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
+        query_params.append(_bq.ScalarQueryParameter(param_name, "STRING", str(value)))
+
+    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
+
+    job_config = _bq.QueryJobConfig(query_parameters=query_params)
+    rows = client.query(sql, job_config=job_config).result()
+    return [dict(row) for row in rows]
+
+
+def get_filter_options(
+    dataset_id: str,
+    table_id: str,
+    fields: list[str],
+    parent_filters: dict,
+    max_values: int = 200,
+):
+    """Return distinct values for each requested field, filtered by any already-set
+    parent selections (e.g. zone filters the district_name options).
+
+    Uses named BigQuery parameters for safe SQL construction.
+    Returns: { field_name: [value, ...] }
+    """
+    from google.cloud import bigquery as _bq
+
+    client = get_client()
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+
+    # Validate field names — only allow identifier-safe names
+    safe_fields = [f for f in fields if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", f)]
+
+    # Build parent WHERE clause from already-selected filters
+    active_parents = {k: v for k, v in parent_filters.items() if v and str(v).strip()}
+
+    result = {}
+    for field in safe_fields:
+        # Only apply parent filters that are *not* the field itself to avoid
+        # self-filtering (e.g. when fetching zone options, don't filter by zone)
+        applicable = {k: v for k, v in active_parents.items() if k != field}
+
+        where_parts = []
+        query_params = []
+        for parent_field, parent_value in applicable.items():
+            if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", parent_field):
+                continue
+            param_name = f"parent_{parent_field}"
+            where_parts.append(f"LOWER(`{parent_field}`) = LOWER(@{param_name})")
+            query_params.append(
+                _bq.ScalarQueryParameter(param_name, "STRING", str(parent_value))
+            )
+
+        where_clause = f"WHERE {' AND '.join(where_parts)} AND `{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''" if where_parts else f"WHERE `{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''"
+
+        sql = f"""
+            SELECT DISTINCT CAST(`{field}` AS STRING) AS value
+            FROM {full_table}
+            {where_clause}
+            ORDER BY value
+            LIMIT {max_values}
+        """
+
+        job_config = _bq.QueryJobConfig(query_parameters=query_params)
+        try:
+            rows = client.query(sql, job_config=job_config).result()
+            result[field] = [row.value for row in rows if row.value]
+        except Exception as e:
+            result[field] = []
+
+    return result
+
+
 def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000):
     """Builds chart-ready summaries for every column:
     - numeric columns: min/max/avg + a 10-bucket histogram

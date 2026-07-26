@@ -55,12 +55,6 @@ export default function KpiCards({ schema, loadedRows = 0, matchingRows = 0, act
         helper={`${numericCount.toLocaleString()} number ${numericCount === 1 ? 'field' : 'fields'} available for charts.`}
         tone="accent"
       />
-      <Card
-        label="Table size"
-        value={formatBytes(schema.num_bytes)}
-        helper="Approximate storage size of the live source table."
-        tone="linen"
-      />
     </section>
   )
 }
