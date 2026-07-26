@@ -89,25 +89,24 @@ function countBy(values) {
   }, new Map())
 }
 
-function summarizeRowsForCharts(refCols, rows, schema) {
+function summarizeRowsForCharts(refCols, rows, schema, metricKey = 'record_count') {
   if (!refCols?.length || !rows) return []
   const byName = new Map((schema?.fields || []).map((f) => [f.name, f]))
+  const numericMetric = chooseMetric(refCols)
   return refCols.map((col) => {
     const field = byName.get(col.name)
     const type = col.type === 'year' || col.name.toLowerCase().includes('year') ? 'year' : getSummaryType(field, col)
-    const vals = rows.map((r) => r?.[col.name]).filter((v) => v !== null && v !== undefined && v !== '')
+    const vals = rows.map((r) => ({ val: r?.[col.name], metric: Number(r?.[numericMetric?.name] ?? 1) }))
+      .filter((d) => d.val !== null && d.val !== undefined && d.val !== '')
     if (type === 'year') {
-      const counts = new Map()
-      vals.forEach((v) => {
-        const yr = parseInt(v, 10)
-        if (Number.isFinite(yr)) {
-          counts.set(yr, (counts.get(yr) || 0) + 1)
-        } else if (v) {
-          counts.set(String(v), (counts.get(String(v)) || 0) + 1)
-        }
+      const sums = new Map()
+      vals.forEach(({ val, metric }) => {
+        const yr = parseInt(val, 10)
+        const key = Number.isFinite(yr) ? yr : String(val)
+        sums.set(key, (sums.get(key) || 0) + (Number.isFinite(metric) ? metric : 0))
       })
-      const trend = Array.from(counts.entries())
-        .map(([yr, count]) => ({ year: yr, count }))
+      const trend = Array.from(sums.entries())
+        .map(([yr, total]) => ({ year: yr, count: total }))
         .sort((a, b) => {
           if (typeof a.year === 'number' && typeof b.year === 'number') return a.year - b.year
           return String(a.year).localeCompare(String(b.year))
@@ -115,7 +114,7 @@ function summarizeRowsForCharts(refCols, rows, schema) {
       return { ...col, type: 'year', trend }
     }
     if (type === 'numeric') {
-      const nums = vals.map(Number).filter(Number.isFinite)
+      const nums = vals.map(d => d.val).map(Number).filter(Number.isFinite)
       if (!nums.length) return { ...col, histogram: [], non_null: 0 }
       const min = Math.min(...nums), max = Math.max(...nums)
       const avg = nums.reduce((s, v) => s + v, 0) / nums.length
@@ -133,19 +132,25 @@ function summarizeRowsForCharts(refCols, rows, schema) {
       return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets }
     }
     if (type === 'categorical') {
-      const top = Array.from(countBy(vals).entries())
+      const top = Array.from(vals.reduce((acc, { val, metric }) => {
+        const k = formatValue(val)
+        acc.set(k, (acc.get(k) || 0) + (Number.isFinite(metric) ? metric : 0))
+        return acc
+      }, new Map()).entries())
         .map(([v, c]) => ({ value: v, count: c }))
         .sort((a, b) => b.count - a.count || sortFilterValues(a.value, b.value))
         .slice(0, 10)
       return { ...col, type: 'categorical', top_values: top }
     }
     if (type === 'temporal') {
-      const periods = vals.map((v) => {
-        const d = new Date(v)
-        if (isNaN(d)) return null
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      }).filter(Boolean)
-      const trend = Array.from(countBy(periods).entries())
+      const periods = vals.map(({ val, metric }) => {
+        const d = new Date(val)
+        return { period: isNaN(d) ? null : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, metric }
+      }).filter(d => d.period)
+      const trend = Array.from(periods.reduce((acc, { period, metric }) => {
+        acc.set(period, (acc.get(period) || 0) + (Number.isFinite(metric) ? metric : 0))
+        return acc
+      }, new Map()).entries())
         .map(([p, c]) => ({ period: p, count: c }))
         .sort((a, b) => a.period.localeCompare(b.period))
       return { ...col, type: 'temporal', trend }
@@ -216,65 +221,86 @@ function FilterBar({
   filters, filterFields, filterOptions, loadingFilterOptions, running,
   onFilterChange, onClearFilters, onRefresh,
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const afc = Object.values(filters).filter(Boolean).length
 
   return (
-    <section className="rounded-lg border border-border/25 bg-linen p-5 shadow-soft sm:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-earth">Farm view filters</h2>
-          <p className="mt-1 text-sm leading-6 text-earth/70">
-            Narrow by zone, district, crop, and more.
-          </p>
+    <>
+      <section className="rounded-lg border border-border/25 bg-linen p-5 shadow-soft sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-earth">Farm view filters</h2>
+            <p className="mt-1 text-sm leading-6 text-earth/70">
+              Narrow by zone, district, crop, and more.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="min-h-12 rounded-md border border-crop bg-crop px-4 py-2 text-sm font-semibold text-linen transition hover:bg-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Refresh live data
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="min-h-12 rounded-md border border-crop bg-crop px-4 py-2 text-sm font-semibold text-linen transition hover:bg-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Refresh live data
-        </button>
-      </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        {/* Dynamic filter fields — each with a searchable dropdown */}
-        {filterFields.map((field) => {
-          const opts = (filterOptions[field.key] || []).slice().sort(sortFilterValues)
-          return (
-            <div key={field.key} className="flex flex-col gap-2 text-sm text-earth">
-              <span className="font-semibold">{field.label}</span>
-              <SearchableSelect
-                value={filters[field.key] || ''}
-                options={opts}
-                placeholder={`All ${field.label.toLowerCase()}`}
-                loading={loadingFilterOptions && opts.length === 0}
-                onChange={(val) => onFilterChange(field.key, val)}
-              />
-            </div>
-          )
-        })}
-      </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          {/* Dynamic filter fields — each with a searchable dropdown */}
+          {filterFields.map((field) => {
+            const opts = (filterOptions[field.key] || []).slice().sort(sortFilterValues)
+            return (
+              <div key={field.key} className="flex flex-col gap-2 text-sm text-earth">
+                <span className="font-semibold">{field.label}</span>
+                <SearchableSelect
+                  value={filters[field.key] || ''}
+                  options={opts}
+                  placeholder={`All ${field.label.toLowerCase()}`}
+                  loading={loadingFilterOptions && opts.length === 0}
+                  onChange={(val) => onFilterChange(field.key, val)}
+                />
+              </div>
+            )
+          })}
+        </div>
 
-      <div className="mt-5 flex flex-col gap-3 border-t border-border/20 pt-4 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-earth/70">
-          {running
-            ? 'Pulling the newest records for this table.'
-            : afc > 0
-              ? `${afc} ${afc === 1 ? 'filter is' : 'filters are'} active — results fetched from BigQuery.`
-              : filterFields.length > 0
-                ? 'Use the searchable filters above to narrow the current farm view.'
-                : 'This table is ready; no filter fields were detected.'}
-        </p>
-        <button
-          type="button"
-          onClick={onClearFilters}
-          disabled={afc === 0}
-          className="min-h-11 rounded-md border border-border/35 bg-linen px-4 py-2 text-sm font-semibold text-earth transition hover:bg-wheat/20 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          Clear all filters
-        </button>
-      </div>
-    </section>
+        <div className="mt-5 flex flex-col gap-3 border-t border-border/20 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-earth/70">
+            {running
+              ? 'Pulling the newest records for this table.'
+              : afc > 0
+                ? `${afc} ${afc === 1 ? 'filter is' : 'filters are'} active — results fetched from BigQuery.`
+                : filterFields.length > 0
+                  ? 'Use the searchable filters above to narrow the current farm view.'
+                  : 'This table is ready; no filter fields were detected.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowDetails(true)}
+              className="min-h-11 rounded-md border border-crop bg-crop px-4 py-2 text-sm font-semibold text-linen transition hover:bg-moss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Get details
+            </button>
+            <button
+              type="button"
+              onClick={onClearFilters}
+              disabled={afc === 0}
+              className="min-h-11 rounded-md border border-border/35 bg-linen px-4 py-2 text-sm font-semibold text-earth transition hover:bg-wheat/20 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Clear all filters
+            </button>
+          </div>
+        </div>
+      </section>
+      {showDetails && (
+        <StatePanel
+          title="Current filter details"
+          body={filterLabel(filterFields, filters)}
+          actionLabel="Close"
+          onAction={() => setShowDetails(false)}
+          tone="neutral"
+        />
+      )}
+    </>
   )
 }
 
