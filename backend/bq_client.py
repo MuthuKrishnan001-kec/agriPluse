@@ -1,11 +1,8 @@
-"""
-Thin wrapper around google-cloud-bigquery that the FastAPI app uses.
-Centralizes: client creation, read-only query enforcement, and a couple
-of helpers used to auto-generate chart-friendly summaries for any table.
-"""
 import os
 import re
+import json
 from google.cloud import bigquery
+from google.oauth2 import service_account
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 MAX_ROWS = int(os.environ.get("MAX_ROWS", "5000"))
@@ -16,9 +13,14 @@ _client = None
 def get_client() -> bigquery.Client:
     global _client
     if _client is None:
-        _client = bigquery.Client(project=PROJECT_ID)
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if creds_json:
+            info = json.loads(creds_json)
+            credentials = service_account.Credentials.from_service_account_info(info)
+            _client = bigquery.Client(project=PROJECT_ID, credentials=credentials)
+        else:
+            _client = bigquery.Client(project=PROJECT_ID)
     return _client
-
 
 def _assert_select_only(sql: str) -> None:
     """Very small guard so the /query endpoint can't be used to mutate data.
