@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query
@@ -10,19 +11,47 @@ import bq_client as bq
 
 app = FastAPI(title="BigQuery Dashboard API")
 
-origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+# ---------------------------------------------------------
+# CORS Configuration
+# ---------------------------------------------------------
+# Gather origins from environment variables if present
+raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
+allowed_origins = [
+    origin.strip() for origin in raw_origins.split(",") if origin.strip()
+]
+
+# Essential defaults for Vercel and local development
+default_origins = [
+    "https://agri-pluse.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+
+for origin in default_origins:
+    if origin not in allowed_origins:
+        allowed_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Ensures GET, POST, OPTIONS, etc. are allowed
+    allow_headers=["*"],  # Allows standard and custom headers from frontend fetch
 )
 
 
+# ---------------------------------------------------------
+# Models & Routes
+# ---------------------------------------------------------
 class QueryBody(BaseModel):
     sql: str
     max_rows: int = 1000
+
+
+@app.get("/")
+def root():
+    """Root route to prevent 404s on general health pings."""
+    return {"status": "ok", "message": "BigQuery Dashboard API is running"}
 
 
 @app.get("/api/health")
@@ -64,7 +93,9 @@ def table_data(
     order_dir: str = "ASC",
 ):
     try:
-        rows = bq.get_table_data(dataset_id, table_id, limit, offset, order_by, order_dir)
+        rows = bq.get_table_data(
+            dataset_id, table_id, limit, offset, order_by, order_dir
+        )
         return {"rows": rows, "limit": limit, "offset": offset}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
