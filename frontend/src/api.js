@@ -51,6 +51,9 @@ export const api = {
 
   runQuery: (sql, maxRows = 500) =>
     request('/api/query', { method: 'POST', body: JSON.stringify({ sql, max_rows: maxRows }) }),
+  // New: Get full filtered count
+  getCount: (dataset, table, filters = {}) =>
+    request('/api/count', { method: 'POST', body: JSON.stringify({ dataset, table, filters }) }),
   // New: Get insights (farm advice)
   getInsights: (dataset, table, filters) =>
     request('/api/insights', { method: 'POST', body: JSON.stringify({ dataset, table, filters }) }),
