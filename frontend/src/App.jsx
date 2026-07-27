@@ -10,6 +10,8 @@ import InsightBar from './components/InsightBar'
 import AdviceModal from './components/AdviceModal'
 import ChatWidget from './components/ChatWidget'
 import TableCardsToggle from './components/TableCardsToggle'
+import FilterBar from './components/FilterBar'
+import PlainSummary from './components/PlainSummary'
 
 const PAGE_SIZE = 25
 
@@ -221,18 +223,31 @@ export default function App() {
   const [insight, setInsight] = useState('')
   const [showAdvice, setShowAdvice] = useState(false)
   const [viewAsCards, setViewAsCards] = useState(false)
+  const [activeView, setActiveView] = useState('overview')
 
   const debounceRef = useRef(null)
 
   // Load list of datasets on mount
   useEffect(() => {
-    api.listDatasets().then(res => setDatasets(res.datasets || [])).catch(() => {/* ignore */})
-  }, [])
+    api.listDatasets().then(res => {
+      const dsList = res.datasets || [];
+      setDatasets(dsList);
+      if (dsList.length > 0 && !selectedDataset) {
+        setSelectedDataset(dsList[0]);
+      }
+    }).catch(() => {/* ignore */})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load tables when a dataset is chosen
   useEffect(() => {
     if (!selectedDataset) return
-    api.listTables(selectedDataset).then(res => setTables(res.tables || [])).catch(() => setTables([]))
+    api.listTables(selectedDataset).then(res => {
+      const tblList = res.tables || [];
+      setTables(tblList);
+      if (tblList.length > 0) {
+        setSelectedTable(tblList[0]);
+      }
+    }).catch(() => setTables([]))
   }, [selectedDataset])
 
   // Load schema/summary/rows when dataset+table changes or pagination/sort/filters change
@@ -376,54 +391,79 @@ export default function App() {
         </div>
       )}
 
-      <FilterBar
-        filters={filters}
-        filterFields={filterFields}
-        filterOptions={filterOptions}
-        loadingFilterOptions={loadingFilterOptions}
-        running={running}
-        onFilterChange={handleFilterChange}
-        onClearFilters={clearFilters}
-        onRefresh={refreshCurrentView}
-      />
+      {activeView === 'overview' ? (
+        <>
+          <FilterBar
+            filters={filters}
+            filterFields={filterFields}
+            filterOptions={filterOptions}
+            loadingFilterOptions={loadingFilterOptions}
+            running={running}
+            onFilterChange={handleFilterChange}
+            onClearFilters={clearFilters}
+            onRefresh={refreshCurrentView}
+          />
 
-      <InsightBar insight={insight} onGetAdvice={() => setShowAdvice(true)} />
+          <InsightBar insight={insight} onGetAdvice={() => setShowAdvice(true)} />
 
-      {showAdvice && (<AdviceModal onClose={() => setShowAdvice(false)} dataset={selectedDataset} table={selectedTable} filters={filters} />)}
+          <div className="mt-8 flex justify-center">
+            <button
+              onClick={() => setActiveView('details')}
+              disabled={!selectedDataset || !selectedTable}
+              className="rounded-lg bg-crop px-6 py-3 text-lg font-semibold text-linen shadow hover:bg-moss disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Get Details
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mb-4">
+            <button
+              onClick={() => setActiveView('overview')}
+              className="inline-flex items-center text-sm font-medium text-earth/80 hover:text-earth transition-colors"
+            >
+              ← Back to Overview
+            </button>
+          </div>
 
-      <PlainSummary summary={plainSummary} />
+          <PlainSummary summary={plainSummary} />
 
-      {summary && <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />}
+          {summary && <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />}
 
-      <TableCardsToggle onToggle={() => setViewAsCards(prev => !prev)} viewAsCards={viewAsCards} />
+          <TableCardsToggle onToggle={() => setViewAsCards(prev => !prev)} viewAsCards={viewAsCards} />
 
-      {viewAsCards ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredRows.map((row, i) => (
-            <div key={i} className="rounded border border-border/25 bg-linen p-4 shadow-soft">
-              {Object.entries(row).map(([k, v]) => (
-                <p key={k} className="text-sm"><span className="font-medium">{humanizeName(k)}:</span> {formatValue(v)}</p>
+          {viewAsCards ? (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {filteredRows.map((row, i) => (
+                <div key={i} className="rounded border border-border/25 bg-linen p-4 shadow-soft">
+                  {Object.entries(row).map(([k, v]) => (
+                    <p key={k} className="text-sm"><span className="font-medium">{humanizeName(k)}:</span> {formatValue(v)}</p>
+                  ))}
+                </div>
               ))}
             </div>
-          ))}
-        </div>
-      ) : (
-        <DataTable
-          rows={filteredRows}
-          columns={rows?.[0] ? Object.keys(rows[0]) : undefined}
-          page={page}
-          pageSize={PAGE_SIZE}
-          sourceRowCount={rows?.length || 0}
-          matchingRowCount={filteredRows.length}
-          activeFilters={activeFilterCount}
-          onPageChange={handlePageChange}
-          orderBy={orderBy}
-          orderDir={orderDir}
-          onSort={handleSort}
-          onRetry={refreshCurrentView}
-          onClearFilters={clearFilters}
-        />
+          ) : (
+            <DataTable
+              rows={filteredRows}
+              columns={rows?.[0] ? Object.keys(rows[0]) : undefined}
+              page={page}
+              pageSize={PAGE_SIZE}
+              sourceRowCount={rows?.length || 0}
+              matchingRowCount={filteredRows.length}
+              activeFilters={activeFilterCount}
+              onPageChange={handlePageChange}
+              orderBy={orderBy}
+              orderDir={orderDir}
+              onSort={handleSort}
+              onRetry={refreshCurrentView}
+              onClearFilters={clearFilters}
+            />
+          )}
+        </>
       )}
+
+      {showAdvice && (<AdviceModal onClose={() => setShowAdvice(false)} dataset={selectedDataset} table={selectedTable} filters={filters} />)}
 
       <ChatWidget dataset={selectedDataset} table={selectedTable} />
     </AppLayout>
