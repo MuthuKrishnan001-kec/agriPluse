@@ -442,13 +442,59 @@ export default function App() {
           <div className="mb-4">
             <button
               onClick={() => setActiveView('overview')}
-              className="inline-flex items-center text-sm font-medium text-earth/80 hover:text-earth transition-colors"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-400 hover:text-emerald-400 transition-colors"
             >
               ← Back to Overview
             </button>
           </div>
           {(() => {
             switch (activeView) {
+              case 'details':
+                return (
+                  <>
+                    <FilterBar
+                      filters={filters}
+                      filterFields={filterFields}
+                      filterOptions={filterOptions}
+                      loadingFilterOptions={loadingFilterOptions}
+                      running={running}
+                      onFilterChange={handleFilterChange}
+                      onClearFilters={clearFilters}
+                      onRefresh={refreshCurrentView}
+                    />
+                    <PlainSummary summary={plainSummary} />
+                    {running && (
+                      <div className="my-6 flex items-center gap-3 text-sm text-slate-400">
+                        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+                        Loading data…
+                      </div>
+                    )}
+                    {!running && chartColumns?.length > 0 && (
+                      <div className="mt-6">
+                        <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />
+                      </div>
+                    )}
+                    {!running && (
+                      <div className="mt-6">
+                        <DataTable
+                          rows={activeFilterCount > 0 ? filteredRows : (rows || [])}
+                          columns={schema?.fields || []}
+                          page={page}
+                          pageSize={PAGE_SIZE}
+                          sourceRowCount={schema?.num_rows}
+                          matchingRowCount={activeFilterCount > 0 ? filteredRows.length : rows?.length}
+                          activeFilters={activeFilterCount}
+                          onPageChange={handlePageChange}
+                          orderBy={orderBy}
+                          orderDir={orderDir}
+                          onSort={handleSort}
+                          onRetry={refreshCurrentView}
+                          onClearFilters={clearFilters}
+                        />
+                      </div>
+                    )}
+                  </>
+                );
               case 'crop':
                 return <CropAnalyticsView />;
               case 'regional':
