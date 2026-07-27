@@ -83,7 +83,11 @@ export default function DataTable({
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const cols = useMemo(() => columns || (rows?.[0] ? Object.keys(rows[0]) : []), [columns, rows])
+  // Normalise: columns may be schema field objects {name, type} OR plain strings
+  const cols = useMemo(() => {
+    const raw = columns || (rows?.[0] ? Object.keys(rows[0]) : [])
+    return raw.map((c) => (c && typeof c === 'object' ? c.name : c)).filter(Boolean)
+  }, [columns, rows])
 
   if (!rows) return null
 

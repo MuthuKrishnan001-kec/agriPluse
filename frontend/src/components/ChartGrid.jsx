@@ -113,7 +113,7 @@ function ChartCard({ title, caption, detail, children }) {
 // ---------------------------------------------------------------------------
 // Premium Custom Interactive Tooltip
 // ---------------------------------------------------------------------------
-const CustomTooltip = ({ active, payload, label, chartType }) => {
+const CustomTooltip = ({ active, payload, label, chartType, dataKey = 'count' }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload
     return (
@@ -122,8 +122,8 @@ const CustomTooltip = ({ active, payload, label, chartType }) => {
           <div>
             <div className="font-semibold text-wheat mb-1">Range: {data.bucket}</div>
             <div className="flex justify-between gap-4">
-              <span className="text-linen/70">Total:</span>
-              <span className="font-mono font-semibold">{formatNumber(data.sumMetric)}</span>
+              <span className="text-linen/70">Records:</span>
+              <span className="font-mono font-semibold">{formatNumber(data[dataKey] ?? data.count ?? data.sumMetric)}</span>
             </div>
           </div>
         )}
@@ -149,7 +149,7 @@ const CustomTooltip = ({ active, payload, label, chartType }) => {
           <div>
             <div className="font-semibold text-wheat mb-1">Year: {data.year}</div>
             <div className="flex justify-between gap-4">
-              <span className="text-linen/70">Total:</span>
+              <span className="text-linen/70">Records:</span>
               <span className="font-mono font-semibold">{formatNumber(data.totalMetric)}</span>
             </div>
           </div>
@@ -163,10 +163,15 @@ const CustomTooltip = ({ active, payload, label, chartType }) => {
 function NumericChart({ column }) {
   const [detail, setDetail] = useState(null)
 
+  // Server-side histograms have `count`; client-side have `sumMetric`.
+  // Use whichever is present so both paths render correctly.
+  const dataKey = column.histogram?.length && 'count' in column.histogram[0] ? 'count' : 'sumMetric'
+
   const handleClick = (state) => {
     const payload = state?.activePayload?.[0]?.payload
     if (!payload) return
-    setDetail({ label: payload.bucket, value: `${formatNumber(payload.count)} records` })
+    const val = payload[dataKey] ?? payload.count ?? payload.sumMetric
+    setDetail({ label: payload.bucket, value: `${formatNumber(val)} records` })
   }
 
   return (
@@ -176,8 +181,8 @@ function NumericChart({ column }) {
           <CartesianGrid stroke={COLORS.border} strokeOpacity={0.28} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="bucket" tick={AXIS_STYLE} axisLine={false} tickLine={false} interval="preserveStartEnd" tickFormatter={(value) => trimLabel(value, 12)} />
           <YAxis tick={AXIS_STYLE} axisLine={false} tickLine={false} width={45} tickFormatter={formatCompactNumber} />
-          <Tooltip content={<CustomTooltip chartType="numeric" />} cursor={{ fill: `${COLORS.border}66` }} />
-          <Bar dataKey="sumMetric" fill={COLORS.wheat} radius={[4, 4, 0, 0]} />
+          <Tooltip content={<CustomTooltip chartType="numeric" dataKey={dataKey} />} cursor={{ fill: `${COLORS.border}66` }} />
+          <Bar dataKey={dataKey} fill={COLORS.wheat} radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>

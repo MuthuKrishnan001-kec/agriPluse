@@ -71,63 +71,86 @@ function bucketValues(values, bucketCount = 10) {
   });
   return buckets;
 };
-function summarizeRowsForCharts(refCols, rows, schema, metricKey = 'record_count') { if (!refCols?.length || !rows) return []
+function summarizeRowsForCharts(refCols, rows, schema) {
+  if (!refCols?.length || !rows) return []
   const byName = new Map((schema?.fields || []).map(f => [f.name, f]))
-  const numericMetric = chooseMetric(refCols)
   return refCols.map(col => {
     const field = byName.get(col.name)
-    const type = col.type === 'year' || col.name.toLowerCase().includes('year') ? 'year' : getSummaryType(field, col)
-    const vals = rows.map(r => ({ val: r?.[col.name], metric: Number(r?.[numericMetric?.name] ?? 1) })).filter(d => d.val !== null && d.val !== undefined && d.val !== '')
+    const isYear = col.type === 'year' || col.name.toLowerCase().includes('year')
+    const type = isYear ? 'year' : getSummaryType(field, col)
+    // Only extract values for this specific column — no cross-column metric bleeding
+    const vals = rows
+      .map(r => r?.[col.name])
+      .filter(v => v !== null && v !== undefined && v !== '')
+
     if (type === 'year') {
       const sums = new Map()
-      vals.forEach(({ val, metric }) => {
+      vals.forEach(val => {
         const yr = parseInt(val, 10)
         const key = Number.isFinite(yr) ? yr : String(val)
-        sums.set(key, (sums.get(key) || 0) + (Number.isFinite(metric) ? metric : 0))
+        sums.set(key, (sums.get(key) || 0) + 1)
       })
-      const trend = Array.from(sums.entries()).map(([yr, total]) => ({ year: yr, totalMetric: total })).sort((a, b) => {
-        if (typeof a.year === 'number' && typeof b.year === 'number') return a.year - b.year
-        return String(a.year).localeCompare(String(b.year))
-      })
+      const trend = Array.from(sums.entries())
+        .map(([yr, totalMetric]) => ({ year: yr, totalMetric }))
+        .sort((a, b) =>
+          typeof a.year === 'number' && typeof b.year === 'number'
+            ? a.year - b.year
+            : String(a.year).localeCompare(String(b.year))
+        )
       return { ...col, type: 'year', trend }
     }
+
     if (type === 'numeric') {
-      const dataPoints = vals.filter(d => Number.isFinite(Number(d.val)) && Number.isFinite(d.metric)).map(d => ({ val: Number(d.val), metric: d.metric }))
-      if (!dataPoints.length) return { ...col, histogram: [], non_null: 0 }
-      const nums = dataPoints.map(d => d.val)
+      const nums = vals.map(Number).filter(Number.isFinite)
+      if (!nums.length) return { ...col, type: 'numeric', histogram: [], non_null: 0 }
       const min = Math.min(...nums), max = Math.max(...nums)
       const avg = nums.reduce((s, v) => s + v, 0) / nums.length
       const bucketCount = min === max ? 1 : 10
+      const range = max - min || 1
       const buckets = Array.from({ length: bucketCount }, (_, i) => {
-        const bucketLabel = min === max ? formatShortNumber(min) : `${formatShortNumber(min + ((max - min) / bucketCount) * i)}-${formatShortNumber(min + ((max - min) / bucketCount) * (i + 1))}`
-        return { bucket: bucketLabel, count: 0, sumMetric: 0 }
+        const lo = min + (range / bucketCount) * i
+        const hi = min + (range / bucketCount) * (i + 1)
+        const label = min === max
+          ? formatShortNumber(min)
+          : `${formatShortNumber(lo)}-${formatShortNumber(hi)}`
+        return { bucket: label, count: 0, sumMetric: 0 }
       })
-      dataPoints.forEach(({ val, metric }) => {
-        const idx = min === max ? 0 : Math.min(bucketCount - 1, Math.floor(((val - min) / (max - min)) * bucketCount))
+      nums.forEach(v => {
+        const idx = min === max ? 0 : Math.min(bucketCount - 1, Math.floor(((v - min) / range) * bucketCount))
         buckets[idx].count++
-        buckets[idx].sumMetric += metric
+        buckets[idx].sumMetric += v   // sumMetric = sum of this column's own values in bucket
       })
       return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets }
     }
+
     if (type === 'categorical') {
-      const top = Array.from(vals.reduce((acc, { val, metric }) => {
-        const k = formatValue(val)
-        acc.set(k, (acc.get(k) || 0) + (Number.isFinite(metric) ? metric : 0))
-        return acc
-      }, new Map()).entries()).map(([v, c]) => ({ value: v, count: c })).sort((a, b) => b.count - a.count || sortFilterValues(a.value, b.value)).slice(0, 10)
-      return { ...col, type: 'categorical', top_values: top }
+      // Count occurrences of each distinct value in this column only
+      const counts = new Map()
+      vals.forEach(v => {
+        const k = formatValue(v)
+        counts.set(k, (counts.get(k) || 0) + 1)
+      })
+      const top_values = Array.from(counts.entries())
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count || sortFilterValues(a.value, b.value))
+        .slice(0, 10)
+      return { ...col, type: 'categorical', top_values }
     }
+
     if (type === 'temporal') {
-      const periods = vals.map(({ val, metric }) => {
+      const periodCounts = new Map()
+      vals.forEach(val => {
         const d = new Date(val)
-        return { period: isNaN(d) ? null : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, metric }
-      }).filter(d => d.period)
-      const trend = Array.from(periods.reduce((acc, { period, metric }) => {
-        acc.set(period, (acc.get(period) || 0) + (Number.isFinite(metric) ? metric : 0))
-        return acc
-      }, new Map()).entries()).map(([p, c]) => ({ period: p, count: c })).sort((a, b) => a.period.localeCompare(b.period))
+        if (isNaN(d)) return
+        const period = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        periodCounts.set(period, (periodCounts.get(period) || 0) + 1)
+      })
+      const trend = Array.from(periodCounts.entries())
+        .map(([period, count]) => ({ period, count }))
+        .sort((a, b) => a.period.localeCompare(b.period))
       return { ...col, type: 'temporal', trend }
     }
+
     return col
   })
 }
