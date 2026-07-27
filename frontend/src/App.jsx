@@ -93,12 +93,65 @@ function filterLabel(fields, filters) {
   if (!active.length) return 'All records in the current view are included.';
   return `Filtered by ${active.map(f => `${f.label}: ${filters[f.key]}`).join(', ')}`;
 }
+
+function getCropName(row) {
+  return String(row?.crop ?? row?.Crop ?? row?.crop_name ?? row?.Crop_Name ?? '').trim() || null;
+}
+
+function getAreaValue(row) {
+  const raw = row?.Area ?? row?.area ?? row?.area_ha ?? row?.Area_ha;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
 function buildPlainSummary({ cols, rows, schema, fields, filters }) {
   const rc = rows?.length ?? 0;
+  const selectedCrop = String(filters?.crop || '').trim();
+  const label = filterLabel(fields, filters);
+
+  if (selectedCrop && rc > 0) {
+    const cropRows = rows.filter(row => {
+      const name = getCropName(row);
+      return name?.toLowerCase() === selectedCrop.toLowerCase();
+    });
+    const areaValues = cropRows
+      .map(getAreaValue)
+      .filter(Number.isFinite);
+    if (areaValues.length > 0) {
+      const avgArea = areaValues.reduce((sum, value) => sum + value, 0) / areaValues.length;
+      const totalArea = areaValues.reduce((sum, value) => sum + value, 0);
+      return {
+        headline: `Showing data for ${selectedCrop}, averaging ${formatShortNumber(avgArea)} area in the records now shown.`,
+        detail: `${label} Total area shown: ${formatShortNumber(totalArea)} across ${cropRows.length.toLocaleString()} record${cropRows.length === 1 ? '' : 's'}.`,
+      };
+    }
+  }
+
+  if (!selectedCrop && rc > 0) {
+    const cropGroups = new Map();
+    rows.forEach(row => {
+      const name = getCropName(row);
+      const area = getAreaValue(row);
+      if (!name || !Number.isFinite(area)) return;
+      const current = cropGroups.get(name) || { totalArea: 0, count: 0 };
+      current.totalArea += area;
+      current.count += 1;
+      cropGroups.set(name, current);
+    });
+    const topCrop = Array.from(cropGroups.entries())
+      .map(([crop, stats]) => ({ crop, avgArea: stats.totalArea / stats.count, totalArea: stats.totalArea, count: stats.count }))
+      .sort((a, b) => b.totalArea - a.totalArea)[0];
+    if (topCrop) {
+      return {
+        headline: `Area is highest for ${topCrop.crop}, averaging ${formatShortNumber(topCrop.avgArea)} in the records now shown.`,
+        detail: `${label} ${topCrop.crop} accounts for ${formatShortNumber(topCrop.totalArea)} total area across ${topCrop.count.toLocaleString()} records.`,
+      };
+    }
+  }
+
   const metric = chooseMetric(cols);
   const dim = chooseDim(fields);
   const afc = Object.values(filters).filter(Boolean).length;
-  const label = filterLabel(fields, filters);
   if (!cols?.length && schema) {
     return {
       headline: `This table has ${schema.num_rows?.toLocaleString?.() || 'live'} source records across ${schema.fields?.length || 0} fields.`,
