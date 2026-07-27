@@ -71,6 +71,15 @@ function bucketValues(values, bucketCount = 10) {
   });
   return buckets;
 };
+function chooseMetric(columns) {
+  if (!Array.isArray(columns)) return null;
+  const exactNumeric = columns.find(c => c?.type === 'numeric' && Number.isFinite(c?.avg));
+  if (exactNumeric) return exactNumeric;
+  const anyNumeric = columns.find(c => c?.type === 'numeric');
+  if (anyNumeric) return anyNumeric;
+  return columns.find(c => c?.type === 'year') || columns.find(c => c?.type === 'temporal') || null;
+}
+
 function chooseDim(fields) {
   return (
     fields.find(f => /crop/i.test(f.key)) ||
