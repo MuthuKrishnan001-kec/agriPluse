@@ -4,25 +4,26 @@ export default {
   theme: {
     extend: {
       colors: {
-        earth: '#16110D',
-        soil: '#1F1813',
-        soil2: '#2A2017',
-        furrow: '#3B2E22',
-        border: '#4F3A2A',
-        muted: '#8E7A63',
-        linen: '#F7EFD9',
-        wheat: '#C79B41',
-        crop: '#5A7F3D',
-        accent: '#D96C2B',
-        moss: '#7B8E4A',
+        earth: '#0f172a',    // slate-900 (Main dark text/elements)
+        soil: '#0f172a',     // slate-900 (Dark sidebar background)
+        soil2: '#1e293b',    // slate-800 (Dark sidebar hover/accents)
+        furrow: '#334155',   // slate-700
+        border: '#e2e8f0',   // slate-200 (Soft borders)
+        muted: '#64748b',    // slate-500 (Muted text)
+        linen: '#f8fafc',    // slate-50 (Clean soft-gray background)
+        wheat: '#34d399',    // emerald-400 (Secondary/light green)
+        crop: '#10b981',     // emerald-500 (Vibrant brand green)
+        accent: '#059669',   // emerald-600 (Primary action)
+        moss: '#047857',     // emerald-700 (Darker green for hover)
       },
       fontFamily: {
         sans: ['Inter', 'sans-serif'],
-        display: ['"Fraunces"', 'serif'],
+        display: ['"Plus Jakarta Sans"', 'Inter', 'sans-serif'], // Updated display font to Plus Jakarta Sans for premium feel
         mono: ['"JetBrains Mono"', 'monospace'],
       },
       boxShadow: {
-        soft: '0 18px 45px rgba(10, 8, 6, 0.24)',
+        soft: '0 4px 20px -2px rgba(15, 23, 42, 0.05)', // Subtle modern shadow
+        md: '0 8px 24px -4px rgba(15, 23, 42, 0.08)',
       },
     },
   },

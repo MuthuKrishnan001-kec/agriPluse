@@ -9,23 +9,15 @@ import Sidebar from './Sidebar';
  *   children – the main content rendered next to the sidebar.
  */
 export default function AppLayout({
-  datasets,
-  tables,
-  selectedDataset,
-  selectedTable,
-  onSelectDataset,
-  onSelectTable,
+  activeView,
+  onNavigate,
   children,
 }) {
   return (
     <div className="flex min-h-screen bg-linen">
       <Sidebar
-        datasets={datasets}
-        tables={tables}
-        selectedDataset={selectedDataset}
-        selectedTable={selectedTable}
-        onSelectDataset={onSelectDataset}
-        onSelectTable={onSelectTable}
+        activeView={activeView}
+        onNavigate={onNavigate}
       />
       <main className="flex-1 overflow-auto p-4 lg:p-6">
         {children}

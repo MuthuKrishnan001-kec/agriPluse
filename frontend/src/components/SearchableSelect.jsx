@@ -89,14 +89,14 @@ export default function SearchableSelect({ value, options = [], placeholder, loa
         aria-haspopup="listbox"
         aria-expanded={open}
         className={[
-          'flex min-h-12 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-base shadow-sm',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-          'transition-colors',
+          'flex min-h-[46px] w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-2 text-left text-base shadow-sm',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-crop focus-visible:border-crop',
+          'transition-all duration-200',
           loading
-            ? 'cursor-not-allowed border-border/35 bg-linen/60 text-earth/40'
+            ? 'cursor-not-allowed border-border bg-slate-50 text-slate-400'
             : value
-              ? 'border-crop/60 bg-crop/5 text-earth'
-              : 'border-border/35 bg-linen text-earth',
+              ? 'border-crop bg-crop/5 text-earth ring-1 ring-crop/20'
+              : 'border-border bg-white text-earth hover:border-slate-300 hover:bg-slate-50',
         ].join(' ')}
       >
         <span className={`flex-1 truncate text-sm ${value ? 'font-medium' : 'text-earth/55'}`}>
@@ -125,10 +125,10 @@ export default function SearchableSelect({ value, options = [], placeholder, loa
 
       {/* Dropdown panel */}
       {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-md border border-border/30 bg-linen shadow-lg">
+        <div className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-md">
           {/* Search input */}
-          <div className="border-b border-border/20 px-2 py-2">
-            <div className="flex items-center gap-2 rounded-md border border-border/35 bg-white/70 px-2.5 py-1.5">
+          <div className="border-b border-border/60 px-2 py-2">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 py-2">
               <SearchIcon />
               <input
                 ref={inputRef}
@@ -169,7 +169,7 @@ export default function SearchableSelect({ value, options = [], placeholder, loa
                 'flex cursor-pointer items-center gap-2 px-3 py-2 focus:outline-none',
                 !value
                   ? 'bg-crop/10 font-semibold text-crop'
-                  : 'text-earth/60 hover:bg-border/15 focus:bg-border/15',
+                  : 'text-slate-500 hover:bg-slate-50 focus:bg-slate-50',
               ].join(' ')}
             >
               <span className="w-4 text-center">{!value && <TickIcon />}</span>
@@ -194,7 +194,7 @@ export default function SearchableSelect({ value, options = [], placeholder, loa
                   'flex cursor-pointer items-center gap-2 px-3 py-2 focus:outline-none',
                   String(value) === String(opt)
                     ? 'bg-crop/10 font-semibold text-crop'
-                    : 'text-earth hover:bg-border/15 focus:bg-border/15',
+                    : 'text-earth hover:bg-slate-50 focus:bg-slate-50',
                 ].join(' ')}
               >
                 <span className="w-4 shrink-0 text-center">

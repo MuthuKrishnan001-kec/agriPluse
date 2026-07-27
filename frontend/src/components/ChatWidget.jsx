@@ -39,47 +39,56 @@ export default function ChatWidget({ dataset, table }) {
   return (
     <div className="fixed bottom-4 right-4 z-50">
       {/* Bubble button */}
-      <button
-        onClick={toggle}
-        className="flex h-12 w-12 items-center justify-center rounded-full bg-crop text-linen shadow-lg hover:bg-moss"
-        aria-label="Open chat"
-      >
-        💬
-      </button>
+      <div className="relative">
+        {!open && (
+          <div className="absolute -inset-1 rounded-full bg-crop opacity-30 blur animate-pulse" />
+        )}
+        <button
+          onClick={toggle}
+          className="relative flex h-14 w-14 items-center justify-center rounded-full bg-crop text-white shadow-lg shadow-crop/40 hover:bg-moss transition-transform hover:scale-105"
+          aria-label="Open chat"
+        >
+          <span className="text-xl">{open ? '✕' : '💬'}</span>
+        </button>
+      </div>
 
       {/* Panel */}
       {open && (
-        <div className="mt-2 w-80 rounded-lg border border-border/25 bg-linen shadow-xl">
-          <div className="flex items-center justify-between bg-crop p-2 text-linen rounded-t-lg">
-            <span className="font-semibold">Farm Advisor</span>
-            <button onClick={toggle} className="text-linen hover:text-wheat">✕</button>
+        <div className="absolute bottom-16 right-0 mt-2 w-80 rounded-2xl border border-border bg-white shadow-2xl">
+          <div className="flex items-center justify-between bg-crop p-3 text-white rounded-t-2xl">
+            <span className="font-bold tracking-tight">Farm Advisor</span>
           </div>
-          <div className="max-h-64 overflow-y-auto p-2">
+          <div className="max-h-80 overflow-y-auto p-4 bg-slate-50">
+            {messages.length === 0 && (
+              <div className="text-center text-sm text-slate-500 py-4">Ask me anything about your farm data!</div>
+            )}
             {messages.map((msg, i) => (
-              <div key={i} className={`mb-2 ${msg.role === 'user' ? 'text-right' : ''}`}>
-                <span className={`inline-block max-w-full rounded px-2 py-1 ${msg.role === 'user' ? 'bg-crop text-linen' : 'bg-earth/10 text-earth'}`}> {msg.content} </span>
+              <div key={i} className={`mb-3 ${msg.role === 'user' ? 'text-right' : ''}`}>
+                <span className={`inline-block max-w-[90%] rounded-2xl px-3.5 py-2 text-sm shadow-sm ${msg.role === 'user' ? 'bg-crop text-white rounded-tr-sm' : 'bg-white border border-slate-200 text-earth rounded-tl-sm'}`}> 
+                  {msg.content} 
+                </span>
               </div>
             ))}
             {loading && (
-              <div className="text-sm text-earth/60 italic">Thinking...</div>
+              <div className="text-sm text-slate-500 italic mb-2">Thinking...</div>
             )}
             {error && (
-              <div className="text-sm text-red-600">{error}</div>
+              <div className="text-sm text-red-600 mb-2">{error}</div>
             )}
           </div>
-          <div className="border-t border-border/25 p-2">
+          <div className="border-t border-border bg-white p-3 rounded-b-2xl">
             <textarea
               rows={2}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKey}
               placeholder="Ask a question..."
-              className="w-full rounded border border-border/25 p-1 text-sm focus:outline-none focus:ring-2 focus:ring-crop"
+              className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-crop resize-none bg-slate-50 text-earth"
             />
             <button
               onClick={sendMessage}
-              disabled={loading}
-              className="mt-1 w-full rounded bg-crop px-3 py-1 text-sm text-linen hover:bg-moss disabled:opacity-50"
+              disabled={loading || !input.trim()}
+              className="mt-2 w-full rounded-xl bg-crop px-4 py-2 text-sm font-bold text-white hover:bg-moss disabled:opacity-50 transition-colors shadow-sm"
             >
               Send
             </button>

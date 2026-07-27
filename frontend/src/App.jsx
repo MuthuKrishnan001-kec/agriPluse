@@ -4,7 +4,6 @@ import { api } from './api'
 import KpiCards from './components/KpiCards'
 import ChartGrid from './components/ChartGrid'
 import DataTable from './components/DataTable'
-import SearchableSelect from './components/SearchableSelect'
 import AppLayout from './components/AppLayout'
 import InsightBar from './components/InsightBar'
 import AdviceModal from './components/AdviceModal'
@@ -12,6 +11,12 @@ import ChatWidget from './components/ChatWidget'
 import TableCardsToggle from './components/TableCardsToggle'
 import FilterBar from './components/FilterBar'
 import PlainSummary from './components/PlainSummary'
+// Placeholder view components (to be expanded later)
+import CropAnalyticsView from './components/views/CropAnalyticsView'
+import RegionalInsightsView from './components/views/RegionalInsightsView'
+import SoilHealthView from './components/views/SoilHealthView'
+import ClimateTrendsView from './components/views/ClimateTrendsView'
+import FarmAdviceView from './components/views/FarmAdviceView'
 
 const PAGE_SIZE = 25
 
@@ -367,19 +372,29 @@ export default function App() {
   // Render
   return (
     <AppLayout
-      datasets={datasets}
-      tables={tables}
-      selectedDataset={selectedDataset}
-      selectedTable={selectedTable}
-      onSelectDataset={setSelectedDataset}
-      onSelectTable={setSelectedTable}
+      activeView={activeView}
+      onNavigate={setActiveView}
     >
-      <section className="rounded-lg border border-border/25 bg-linen px-4 py-4 shadow-soft sm:px-5">
-        <h1 className="font-display text-3xl font-semibold leading-tight text-earth">Platform overview</h1>
-        <p className="mt-1 max-w-3xl text-sm leading-6 text-earth/70 sm:text-base">
-          {selectedDataset && selectedTable ? `Reviewing ${selectedDataset}.${selectedTable} with filters, visual summaries, and live rows.` : 'Select a dataset and table to begin.'}
-        </p>
-      </section>
+      <header className="mb-6 rounded-2xl bg-white p-6 shadow-sm border border-border">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="font-display text-3xl font-bold tracking-tight text-earth">Platform Overview</h1>
+              {selectedDataset && selectedTable && (
+                <span className="inline-flex items-center rounded-full bg-crop/10 px-2.5 py-0.5 text-xs font-semibold text-crop border border-crop/20">
+                  <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-crop animate-pulse"></span>
+                  Live Data
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-slate-500">
+              {selectedDataset && selectedTable 
+                ? `Active Dataset: ${selectedDataset} / ${selectedTable}` 
+                : 'Select a dataset and table to begin.'}
+            </p>
+          </div>
+        </div>
+      </header>
 
       {error && (
         <div className="mt-6">
@@ -393,6 +408,12 @@ export default function App() {
 
       {activeView === 'overview' ? (
         <>
+          {selectedDataset && selectedTable && schema && (
+            <div className="mb-6">
+              <KpiCards schema={schema} loadedRows={rows?.length} matchingRows={filteredRows?.length} activeFilters={activeFilterCount} />
+            </div>
+          )}
+
           <FilterBar
             filters={filters}
             filterFields={filterFields}
@@ -410,7 +431,7 @@ export default function App() {
             <button
               onClick={() => setActiveView('details')}
               disabled={!selectedDataset || !selectedTable}
-              className="rounded-lg bg-crop px-6 py-3 text-lg font-semibold text-linen shadow hover:bg-moss disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="rounded-xl bg-crop px-8 py-3.5 text-lg font-bold text-white shadow-md shadow-crop/20 hover:bg-moss hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all duration-200"
             >
               Get Details
             </button>
@@ -426,47 +447,27 @@ export default function App() {
               ← Back to Overview
             </button>
           </div>
-
-          <PlainSummary summary={plainSummary} />
-
-          {summary && <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />}
-
-          <TableCardsToggle onToggle={() => setViewAsCards(prev => !prev)} viewAsCards={viewAsCards} />
-
-          {viewAsCards ? (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredRows.map((row, i) => (
-                <div key={i} className="rounded border border-border/25 bg-linen p-4 shadow-soft">
-                  {Object.entries(row).map(([k, v]) => (
-                    <p key={k} className="text-sm"><span className="font-medium">{humanizeName(k)}:</span> {formatValue(v)}</p>
-                  ))}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <DataTable
-              rows={filteredRows}
-              columns={rows?.[0] ? Object.keys(rows[0]) : undefined}
-              page={page}
-              pageSize={PAGE_SIZE}
-              sourceRowCount={rows?.length || 0}
-              matchingRowCount={filteredRows.length}
-              activeFilters={activeFilterCount}
-              onPageChange={handlePageChange}
-              orderBy={orderBy}
-              orderDir={orderDir}
-              onSort={handleSort}
-              onRetry={refreshCurrentView}
-              onClearFilters={clearFilters}
-            />
-          )}
+          {(() => {
+            switch (activeView) {
+              case 'crop':
+                return <CropAnalyticsView />;
+              case 'regional':
+                return <RegionalInsightsView />;
+              case 'soil':
+                return <SoilHealthView />;
+              case 'climate':
+                return <ClimateTrendsView />;
+              case 'advice':
+                return <FarmAdviceView />;
+              default:
+                return null;
+            }
+          })()}
         </>
       )}
-
       {showAdvice && (<AdviceModal onClose={() => setShowAdvice(false)} dataset={selectedDataset} table={selectedTable} filters={filters} />)}
 
       <ChatWidget dataset={selectedDataset} table={selectedTable} />
     </AppLayout>
-  )
-}
-
+  );
+};
