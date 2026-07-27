@@ -187,6 +187,13 @@ def table_count(dataset_id: str, table_id: str, filters: str | None = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/datasets/{dataset_id}/tables/{table_id}/dashboard-charts")
+def dashboard_charts(dataset_id: str, table_id: str, filters: str | None = None):
+    try:
+        parsed_filters = json.loads(filters) if filters else None
+        return bq.get_dashboard_charts(dataset_id, table_id, parsed_filters)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/query")
 def run_query(body: QueryBody):

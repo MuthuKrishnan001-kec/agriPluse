@@ -71,90 +71,6 @@ function bucketValues(values, bucketCount = 10) {
   });
   return buckets;
 };
-function summarizeRowsForCharts(refCols, rows, schema) {
-  if (!refCols?.length || !rows) return []
-  const byName = new Map((schema?.fields || []).map(f => [f.name, f]))
-  return refCols.map(col => {
-    const field = byName.get(col.name)
-    const isYear = col.type === 'year' || col.name.toLowerCase().includes('year')
-    const type = isYear ? 'year' : getSummaryType(field, col)
-    // Only extract values for this specific column — no cross-column metric bleeding
-    const vals = rows
-      .map(r => r?.[col.name])
-      .filter(v => v !== null && v !== undefined && v !== '')
-
-    if (type === 'year') {
-      const sums = new Map()
-      vals.forEach(val => {
-        const yr = parseInt(val, 10)
-        const key = Number.isFinite(yr) ? yr : String(val)
-        sums.set(key, (sums.get(key) || 0) + 1)
-      })
-      const trend = Array.from(sums.entries())
-        .map(([yr, totalMetric]) => ({ year: yr, totalMetric }))
-        .sort((a, b) =>
-          typeof a.year === 'number' && typeof b.year === 'number'
-            ? a.year - b.year
-            : String(a.year).localeCompare(String(b.year))
-        )
-      return { ...col, type: 'year', trend }
-    }
-
-    if (type === 'numeric') {
-      const nums = vals.map(Number).filter(Number.isFinite)
-      if (!nums.length) return { ...col, type: 'numeric', histogram: [], non_null: 0 }
-      const min = Math.min(...nums), max = Math.max(...nums)
-      const avg = nums.reduce((s, v) => s + v, 0) / nums.length
-      const bucketCount = min === max ? 1 : 10
-      const range = max - min || 1
-      const buckets = Array.from({ length: bucketCount }, (_, i) => {
-        const lo = min + (range / bucketCount) * i
-        const hi = min + (range / bucketCount) * (i + 1)
-        const label = min === max
-          ? formatShortNumber(min)
-          : `${formatShortNumber(lo)}-${formatShortNumber(hi)}`
-        return { bucket: label, count: 0, sumMetric: 0 }
-      })
-      nums.forEach(v => {
-        const idx = min === max ? 0 : Math.min(bucketCount - 1, Math.floor(((v - min) / range) * bucketCount))
-        buckets[idx].count++
-        buckets[idx].sumMetric += v   // sumMetric = sum of this column's own values in bucket
-      })
-      return { ...col, type: 'numeric', min, max, avg, non_null: nums.length, histogram: buckets }
-    }
-
-    if (type === 'categorical') {
-      // Count occurrences of each distinct value in this column only
-      const counts = new Map()
-      vals.forEach(v => {
-        const k = formatValue(v)
-        counts.set(k, (counts.get(k) || 0) + 1)
-      })
-      const top_values = Array.from(counts.entries())
-        .map(([value, count]) => ({ value, count }))
-        .sort((a, b) => b.count - a.count || sortFilterValues(a.value, b.value))
-        .slice(0, 10)
-      return { ...col, type: 'categorical', top_values }
-    }
-
-    if (type === 'temporal') {
-      const periodCounts = new Map()
-      vals.forEach(val => {
-        const d = new Date(val)
-        if (isNaN(d)) return
-        const period = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-        periodCounts.set(period, (periodCounts.get(period) || 0) + 1)
-      })
-      const trend = Array.from(periodCounts.entries())
-        .map(([period, count]) => ({ period, count }))
-        .sort((a, b) => a.period.localeCompare(b.period))
-      return { ...col, type: 'temporal', trend }
-    }
-
-    return col
-  })
-}
-function chooseMetric(cols) { const num = (cols || []).filter(c => c.type === 'numeric' && c.non_null !== 0); return num.find(c => /yield|production|harvest|output|area|rain|income|price/i.test(c.name)) || num[0] }
 function chooseDim(fields) {
   return (
     fields.find(f => /crop/i.test(f.key)) ||
@@ -238,6 +154,7 @@ export default function App() {
   const [selectedTable, setSelectedTable] = useState('')
   const [schema, setSchema] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [dashboardCharts, setDashboardCharts] = useState(null)
   const [rows, setRows] = useState(null)
   const [page, setPage] = useState(0)
   const [orderBy, setOrderBy] = useState(null)
@@ -282,14 +199,16 @@ export default function App() {
   const loadTable = useCallback(async (ds, tbl, pageArg, obArg, odArg, activeFilters) => {
     setRunning(true); setError(null)
     try {
-      const [sr, smr, dr] = await Promise.all([
+      const [sr, smr, dr, cr] = await Promise.all([
         api.getSchema(ds, tbl),
-        api.getSummary(ds, tbl),
-        api.getData(ds, tbl, { limit: PAGE_SIZE, offset: pageArg * PAGE_SIZE, orderBy: obArg, orderDir: odArg, filters: activeFilters })
+        api.getSummary(ds, tbl, activeFilters),
+        api.getData(ds, tbl, { limit: PAGE_SIZE, offset: pageArg * PAGE_SIZE, orderBy: obArg, orderDir: odArg, filters: activeFilters }),
+        api.getDashboardCharts(ds, tbl, activeFilters)
       ])
       setSchema(sr)
       setSummary(smr.columns || [])
       setRows(dr.rows || [])
+      setDashboardCharts(cr || {})
     } catch (e) { setError({ scope: 'table', message: friendlyError(e.message) }) }
     finally { setRunning(false) }
   }, [])
@@ -335,12 +254,7 @@ export default function App() {
 
   const activeFilterCount = useMemo(() => Object.values(filters).filter(Boolean).length, [filters])
 
-  const chartColumns = useMemo(() => {
-    if (!summary) return []
-    return activeFilterCount > 0 ? summarizeRowsForCharts(summary, filteredRows, schema) : summary
-  }, [activeFilterCount, filteredRows, schema, summary])
-
-  const plainSummary = useMemo(() => buildPlainSummary({ cols: chartColumns, rows: activeFilterCount > 0 ? filteredRows : rows || [], schema, fields: filterFields, filters }), [activeFilterCount, chartColumns, filterFields, filteredRows, filters, rows, schema])
+  const plainSummary = useMemo(() => buildPlainSummary({ cols: summary, rows: activeFilterCount > 0 ? filteredRows : rows || [], schema, fields: filterFields, filters }), [activeFilterCount, summary, filterFields, filteredRows, filters, rows, schema])
 
   // Handlers for filter changes, pagination, sorting
   const handleFilterChange = useCallback((key, value) => {
@@ -492,9 +406,9 @@ export default function App() {
                         Loading data…
                       </div>
                     )}
-                    {!running && chartColumns?.length > 0 && (
+                    {!running && dashboardCharts && (
                       <div className="mt-6">
-                        <ChartGrid columns={chartColumns} activeFilters={activeFilterCount} />
+                        <ChartGrid charts={dashboardCharts} activeFilters={activeFilterCount} />
                       </div>
                     )}
                     {!running && (

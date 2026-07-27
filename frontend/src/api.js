@@ -15,8 +15,9 @@ async function request(path, options = {}) {
 export const api = {
   listDatasets: () => request('/api/datasets'),
   listTables: (dataset) => request(`/api/datasets/${dataset}/tables`),
-  getSchema: (dataset, table) => request(`/api/datasets/${dataset}/tables/${table}/schema`),
-  getSummary: (dataset, table) => request(`/api/datasets/${dataset}/tables/${table}/summary`),
+  getSummary: (dataset, table, filters) => request(`/api/datasets/${dataset}/tables/${table}/summary${buildFilterQuery(filters)}`),
+  getDashboardCharts: (dataset, table, filters) => request(`/api/datasets/${dataset}/tables/${table}/dashboard-charts${buildFilterQuery(filters)}`),
+  getCount: (dataset, table, filters) => request(`/api/datasets/${dataset}/tables/${table}/count${buildFilterQuery(filters)}`),
 
   getData: (dataset, table, { limit = 50, offset = 0, orderBy, orderDir, filters = {} } = {}) => {
     const params = new URLSearchParams({ limit, offset })

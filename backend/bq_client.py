@@ -351,3 +351,94 @@ def run_readonly_query(sql: str, max_rows: int = 1000):
     job = client.query(sql)
     rows = list(job.result(max_results=min(max_rows, MAX_ROWS)))
     return [dict(row) for row in rows]
+
+
+def get_dashboard_charts(dataset_id: str, table_id: str, filters: dict | None = None):
+    """Executes specific analytical queries for the 6 custom dashboard charts."""
+    client = get_client()
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    where_clause, query_params = _build_filter_where(filters, valid_cols)
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
+    
+    def run_query(sql, mapper=dict):
+        try:
+            return [mapper(row) for row in client.query(sql, job_config=job_config).result()]
+        except Exception as e:
+            return {"error": str(e)}
+
+    # 1. Yield by Crop (Bar Chart)
+    def q_yield_by_crop():
+        sql = f"""
+            SELECT Crop AS category, AVG(Yield) AS value 
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} Crop IS NOT NULL AND Yield IS NOT NULL
+            GROUP BY Crop ORDER BY value DESC LIMIT 10
+        """
+        return run_query(sql)
+
+    # 2. Total Production by District (Bar/Pie Chart)
+    def q_production_by_district():
+        sql = f"""
+            SELECT District_Name AS category, SUM(Production) AS value 
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} District_Name IS NOT NULL AND Production IS NOT NULL
+            GROUP BY District_Name ORDER BY value DESC LIMIT 10
+        """
+        return run_query(sql)
+
+    # 3. Production Trends Over Time (Line Chart)
+    def q_production_trends():
+        sql = f"""
+            SELECT CAST(Year AS INT64) AS year, SUM(Production) AS value 
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} Year IS NOT NULL AND Production IS NOT NULL
+            GROUP BY Year ORDER BY year ASC
+        """
+        return run_query(sql)
+
+    # 4. Seasonal Efficiency (Grouped Bar Chart)
+    def q_seasonal_efficiency():
+        sql = f"""
+            SELECT Season AS category, AVG(Yield) AS value 
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} Season IS NOT NULL AND Yield IS NOT NULL
+            GROUP BY Season ORDER BY value DESC
+        """
+        return run_query(sql)
+
+    # 5. Market Value by Crop (Bar Chart)
+    def q_market_value():
+        sql = f"""
+            SELECT Crop AS category, AVG(Price) AS value 
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} Crop IS NOT NULL AND Price IS NOT NULL
+            GROUP BY Crop ORDER BY value DESC LIMIT 10
+        """
+        return run_query(sql)
+
+    # 6. Area vs. Production (Scatter Plot)
+    def q_area_production():
+        sql = f"""
+            SELECT Area AS x, Production AS y, Crop AS category
+            FROM {full_table} {where_clause}
+            {"AND" if where_clause else "WHERE"} Area IS NOT NULL AND Production IS NOT NULL AND Crop IS NOT NULL
+            LIMIT 500
+        """
+        return run_query(sql)
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {
+            "yield_by_crop": executor.submit(q_yield_by_crop),
+            "production_by_district": executor.submit(q_production_by_district),
+            "production_trends": executor.submit(q_production_trends),
+            "seasonal_efficiency": executor.submit(q_seasonal_efficiency),
+            "market_value_by_crop": executor.submit(q_market_value),
+            "area_vs_production": executor.submit(q_area_production),
+        }
+        for key, future in futures.items():
+            results[key] = future.result()
+
+    return results
