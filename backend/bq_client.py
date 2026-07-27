@@ -60,24 +60,57 @@ def get_schema(dataset_id: str, table_id: str):
 
 
 def get_table_data(dataset_id: str, table_id: str, limit: int = 100, offset: int = 0,
-                    order_by: str | None = None, order_dir: str = "ASC"):
+                    order_by: str | None = None, order_dir: str = "ASC",
+                    filters: dict | None = None):
     client = get_client()
     limit = min(limit, MAX_ROWS)
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+
+    where_clause = ""
+    query_params = []
+    if filters:
+        conditions = []
+        for col, val in filters.items():
+            if col not in valid_cols:
+                raise ValueError(f"Unknown column: {col}")
+            if val in (None, ""):
+                continue
+            param_name = f"filter_{col}"
+            conditions.append(f"`{col}` = @{param_name}")
+            query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(val)))
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
     order_clause = ""
     if order_by:
-        # order_by must be a real column name — validate against schema first
-        schema = get_schema(dataset_id, table_id)
-        valid_cols = {f["name"] for f in schema["fields"]}
         if order_by not in valid_cols:
             raise ValueError(f"Unknown column: {order_by}")
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
         order_clause = f"ORDER BY `{order_by}` {direction}"
-    sql = f"SELECT * FROM {full_table} {order_clause} LIMIT {limit} OFFSET {offset}"
-    rows = client.query(sql).result()
+
+    sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
+    rows = client.query(sql, job_config=job_config).result()
     return [dict(row) for row in rows]
 
 
+def get_distinct_values(dataset_id: str, table_id: str, column: str, limit: int = 200):
+    client = get_client()
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+    if column not in valid_cols:
+        raise ValueError(f"Unknown column: {column}")
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    sql = f"""
+        SELECT DISTINCT `{column}` AS value
+        FROM {full_table}
+        WHERE `{column}` IS NOT NULL
+        ORDER BY value
+        LIMIT {limit}
+    """
+    return [str(r.value) for r in client.query(sql).result()]
 # Known filter fields and their column names in BigQuery
 FILTER_FIELDS = ["zone", "district_name", "crop", "season", "soil_type", "year"]
 

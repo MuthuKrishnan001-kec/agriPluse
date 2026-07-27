@@ -8,19 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import bq_client as bq
+from grok_client import get_insights, chat as grok_chat
 
 app = FastAPI(title="BigQuery Dashboard API")
 
 # ---------------------------------------------------------
 # CORS Configuration
 # ---------------------------------------------------------
-# Gather origins from environment variables if present
 raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
 allowed_origins = [
     origin.strip() for origin in raw_origins.split(",") if origin.strip()
 ]
 
-# Essential defaults for Vercel and local development
 default_origins = [
     "https://agri-pluse.vercel.app",
     "http://localhost:5173",
@@ -35,8 +34,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Ensures GET, POST, OPTIONS, etc. are allowed
-    allow_headers=["*"],  # Allows standard and custom headers from frontend fetch
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -46,6 +45,23 @@ app.add_middleware(
 class QueryBody(BaseModel):
     sql: str
     max_rows: int = 1000
+
+
+class InsightsBody(BaseModel):
+    dataset: str
+    table: str
+    filters: dict | None = None
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage]
+    dataset: str | None = None
+    table: str | None = None
 
 
 @app.get("/")
@@ -91,7 +107,6 @@ def table_data(
     offset: int = Query(0, ge=0),
     order_by: str | None = None,
     order_dir: str = "ASC",
-    # Cascading filter params — all optional
     zone: str | None = Query(None),
     district_name: str | None = Query(None),
     crop: str | None = Query(None),
@@ -107,7 +122,6 @@ def table_data(
         "soil_type": soil_type,
         "year": year,
     }
-    # Use filtered query whenever at least one filter is active
     has_filters = any(v for v in filters.values() if v)
     try:
         if has_filters:
@@ -130,7 +144,6 @@ def filter_options(
     dataset_id: str,
     table_id: str,
     fields: str = Query(..., description="Comma-separated list of field names to fetch options for"),
-    # Optional parent filter context — values already chosen by the user
     zone: str | None = Query(None),
     district_name: str | None = Query(None),
     crop: str | None = Query(None),
@@ -156,7 +169,6 @@ def filter_options(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @app.get("/api/datasets/{dataset_id}/tables/{table_id}/summary")
 def table_summary(dataset_id: str, table_id: str):
     try:
@@ -170,6 +182,39 @@ def run_query(body: QueryBody):
     try:
         rows = bq.run_readonly_query(body.sql, body.max_rows)
         return {"rows": rows}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/insights")
+def insights(body: InsightsBody):
+    try:
+        schema_info = bq.get_schema(body.dataset, body.table)
+        summary = bq.get_column_summary(body.dataset, body.table)
+        text = get_insights(body.dataset, body.table, schema_info, summary, body.filters)
+        return {"insight": text}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat")
+def chat_endpoint(body: ChatBody):
+    try:
+        context = None
+        if body.dataset and body.table:
+            schema_info = bq.get_schema(body.dataset, body.table)
+            context = {
+                "dataset": body.dataset,
+                "table": body.table,
+                "columns": [f["name"] for f in schema_info["fields"]],
+            }
+        history = [m.dict() for m in body.messages]
+        reply = grok_chat(history, context)
+        return {"reply": reply}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
