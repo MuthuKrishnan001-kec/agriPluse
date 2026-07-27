@@ -152,24 +152,20 @@ def get_table_data_filtered(
     limit = min(limit, MAX_ROWS)
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
 
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+
     order_clause = ""
     if order_by:
-        schema = get_schema(dataset_id, table_id)
-        valid_cols = {f["name"] for f in schema["fields"]}
         if order_by not in valid_cols:
             raise ValueError(f"Unknown column: {order_by}")
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
         order_clause = f"ORDER BY `{order_by}` {direction}"
 
     where_clause, query_params = _build_filter_where(filters, valid_cols)
-        param_name = f"filter_{field}"
-        where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
-        query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(value)))
-
-    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
 
-    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
     rows = client.query(sql, job_config=job_config).result()
     return [dict(row) for row in rows]
 
@@ -250,7 +246,7 @@ def _summarize_column(client, full_table, field, where_clause, query_params):
     try:
         if "year" in name.lower():
             sql = f"""
-                SELECT {col} AS year, COUNT(*) AS count
+                SELECT {col} AS year, COUNT(*) AS totalMetric
                 FROM {full_table}
                 {where_clause}
                 {"AND" if where_clause else "WHERE"} {col} IS NOT NULL
@@ -260,9 +256,9 @@ def _summarize_column(client, full_table, field, where_clause, query_params):
             for r in client.query(sql, job_config=job_config).result():
                 if r.year is not None:
                     try:
-                        trend.append({"year": int(r.year), "count": r.count})
+                        trend.append({"year": int(r.year), "totalMetric": r.totalMetric})
                     except (ValueError, TypeError):
-                        trend.append({"year": str(r.year), "count": r.count})
+                        trend.append({"year": str(r.year), "totalMetric": r.totalMetric})
             return {"name": name, "type": "year", "trend": trend}
 
         elif ftype in ("INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"):
@@ -345,30 +341,8 @@ def get_column_summary(dataset_id: str, table_id: str, filters: dict | None = No
 
     return summaries
 
-def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000):
-    """Builds chart-ready summaries for every column:
-    - numeric columns: min/max/avg + a 10-bucket histogram
-    - string/bool columns: top 10 value counts
-    - date/timestamp columns: row count trend bucketed by day/month
-    Runs one query set per column concurrently instead of sequentially —
-    this is the main speed win for wide tables.
-    """
-    client = get_client()
-    schema = get_schema(dataset_id, table_id)
-    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
-    fields = schema["fields"]
-
-    summaries = [None] * len(fields)
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        future_to_idx = {
-            executor.submit(_summarize_column, client, full_table, field): idx
-            for idx, field in enumerate(fields)
-        }
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            summaries[idx] = future.result()
-
-    return summaries
+# The canonical get_column_summary is defined above (line ~328).
+# It accepts optional filters and uses _build_filter_where for WHERE-clause injection.
 
 
 def run_readonly_query(sql: str, max_rows: int = 1000):
