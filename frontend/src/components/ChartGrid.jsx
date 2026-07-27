@@ -104,7 +104,7 @@ const CustomTooltip = ({ active, payload, label, xLabel, yLabel, yFormat = forma
 function YieldByCropChart({ data }) {
   const [detail, setDetail] = useState(null)
   
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const topCrop = [...data].sort((a, b) => b.value - a.value)[0]
   const caption = topCrop 
@@ -137,7 +137,7 @@ function YieldByCropChart({ data }) {
 // ---------------------------------------------------------------------------
 function ProductionByDistrictChart({ data }) {
   const [detail, setDetail] = useState(null)
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const topDistrict = [...data].sort((a, b) => b.value - a.value)[0]
   const caption = topDistrict 
@@ -170,7 +170,7 @@ function ProductionByDistrictChart({ data }) {
 // ---------------------------------------------------------------------------
 function ProductionTrendsChart({ data }) {
   const [detail, setDetail] = useState(null)
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const caption = "Overall production volume trend over the years."
 
@@ -200,7 +200,7 @@ function ProductionTrendsChart({ data }) {
 // ---------------------------------------------------------------------------
 function SeasonalEfficiencyChart({ data }) {
   const [detail, setDetail] = useState(null)
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const topSeason = [...data].sort((a, b) => b.value - a.value)[0]
   const caption = topSeason 
@@ -233,7 +233,7 @@ function SeasonalEfficiencyChart({ data }) {
 // ---------------------------------------------------------------------------
 function MarketValueChart({ data }) {
   const [detail, setDetail] = useState(null)
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const topCrop = [...data].sort((a, b) => b.value - a.value)[0]
   const caption = topCrop 
@@ -266,7 +266,7 @@ function MarketValueChart({ data }) {
 // ---------------------------------------------------------------------------
 function AreaProductionScatterChart({ data }) {
   const [detail, setDetail] = useState(null)
-  if (!data || data.length === 0 || data.error) return null
+  if (!Array.isArray(data) || data.length === 0) return null
 
   const caption = "Correlation between cultivated land area and total production output."
 
