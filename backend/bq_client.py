@@ -353,6 +353,22 @@ def run_readonly_query(sql: str, max_rows: int = 1000):
     return [dict(row) for row in rows]
 
 
+def _coerce_number(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
 def get_dashboard_charts(dataset_id: str, table_id: str, filters: dict | None = None):
     """Executes specific analytical queries for the 6 custom dashboard charts."""
     client = get_client()
@@ -361,72 +377,84 @@ def get_dashboard_charts(dataset_id: str, table_id: str, filters: dict | None = 
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     where_clause, query_params = _build_filter_where(filters, valid_cols)
     job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
-    
-    def run_query(sql, mapper=dict):
+
+    def run_query(sql, mapper=None):
         try:
-            return [mapper(row) for row in client.query(sql, job_config=job_config).result()]
+            rows = client.query(sql, job_config=job_config).result()
+            if mapper is None:
+                return [dict(row) for row in rows]
+            return [mapper(row) for row in rows]
         except Exception as e:
             return {"error": str(e)}
+
+    def normalize_chart_row(row):
+        return {
+            "category": row.get("category"),
+            "value": _coerce_number(row.get("value")),
+            "year": row.get("year"),
+            "x": _coerce_number(row.get("x")),
+            "y": _coerce_number(row.get("y")),
+        }
 
     # 1. Yield by Crop (Bar Chart)
     def q_yield_by_crop():
         sql = f"""
-            SELECT Crop AS category, AVG(Yield) AS value 
+            SELECT Crop AS category, AVG(SAFE_CAST(Yield AS FLOAT64)) AS value
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} Crop IS NOT NULL AND Yield IS NOT NULL
             GROUP BY Crop ORDER BY value DESC LIMIT 10
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     # 2. Total Production by District (Bar/Pie Chart)
     def q_production_by_district():
         sql = f"""
-            SELECT District_Name AS category, SUM(Production) AS value 
+            SELECT District_Name AS category, SUM(SAFE_CAST(Production AS FLOAT64)) AS value
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} District_Name IS NOT NULL AND Production IS NOT NULL
             GROUP BY District_Name ORDER BY value DESC LIMIT 10
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     # 3. Production Trends Over Time (Line Chart)
     def q_production_trends():
         sql = f"""
-            SELECT CAST(Year AS INT64) AS year, SUM(Production) AS value 
+            SELECT CAST(Year AS INT64) AS year, SUM(SAFE_CAST(Production AS FLOAT64)) AS value
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} Year IS NOT NULL AND Production IS NOT NULL
             GROUP BY Year ORDER BY year ASC
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     # 4. Seasonal Efficiency (Grouped Bar Chart)
     def q_seasonal_efficiency():
         sql = f"""
-            SELECT Season AS category, AVG(Yield) AS value 
+            SELECT Season AS category, AVG(SAFE_CAST(Yield AS FLOAT64)) AS value
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} Season IS NOT NULL AND Yield IS NOT NULL
             GROUP BY Season ORDER BY value DESC
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     # 5. Market Value by Crop (Bar Chart)
     def q_market_value():
         sql = f"""
-            SELECT Crop AS category, AVG(Price) AS value 
+            SELECT Crop AS category, AVG(SAFE_CAST(Price AS FLOAT64)) AS value
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} Crop IS NOT NULL AND Price IS NOT NULL
             GROUP BY Crop ORDER BY value DESC LIMIT 10
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     # 6. Area vs. Production (Scatter Plot)
     def q_area_production():
         sql = f"""
-            SELECT Area AS x, Production AS y, Crop AS category
+            SELECT SAFE_CAST(Area AS FLOAT64) AS x, SAFE_CAST(Production AS FLOAT64) AS y, Crop AS category
             FROM {full_table} {where_clause}
             {"AND" if where_clause else "WHERE"} Area IS NOT NULL AND Production IS NOT NULL AND Crop IS NOT NULL
             LIMIT 500
         """
-        return run_query(sql)
+        return run_query(sql, mapper=normalize_chart_row)
 
     results = {}
     with ThreadPoolExecutor(max_workers=6) as executor:
