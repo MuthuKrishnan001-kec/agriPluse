@@ -1,5 +1,10 @@
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
+function buildFilterQuery(filters = {}) {
+  if (!filters || Object.keys(filters).length === 0) return ''
+  return `?filters=${encodeURIComponent(JSON.stringify(filters))}`
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -52,9 +57,6 @@ export const api = {
 
   runQuery: (sql, maxRows = 500) =>
     request('/api/query', { method: 'POST', body: JSON.stringify({ sql, max_rows: maxRows }) }),
-  // New: Get full filtered count
-  getCount: (dataset, table, filters = {}) =>
-    request('/api/count', { method: 'POST', body: JSON.stringify({ dataset, table, filters }) }),
   // New: Get insights (farm advice)
   getInsights: (dataset, table, filters) =>
     request('/api/insights', { method: 'POST', body: JSON.stringify({ dataset, table, filters }) }),

@@ -24,6 +24,20 @@ def get_client() -> bigquery.Client:
     return _client
 
 
+def _build_cols_map(fields):
+    return {field["name"].lower(): field["name"] for field in fields}
+
+
+def _get_actual_col(mapping: dict, column: str | None):
+    if column is None:
+        return None
+    return mapping.get(column) or mapping.get(column.lower())
+
+
+def _quote_identifier(name: str):
+    return f"`{name.replace('`', '``')}`"
+
+
 def _assert_select_only(sql: str) -> None:
     """Very small guard so the /query endpoint can't be used to mutate data.
     This is a convenience check, not a security boundary — the real
@@ -68,29 +82,31 @@ def get_table_data(dataset_id: str, table_id: str, limit: int = 100, offset: int
     limit = min(limit, MAX_ROWS)
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
+    valid_cols = _build_cols_map(schema["fields"])
 
     where_clause = ""
     query_params = []
     if filters:
         conditions = []
         for col, val in filters.items():
-            if col not in valid_cols:
+            actual_col = _get_actual_col(valid_cols, col)
+            if actual_col is None:
                 raise ValueError(f"Unknown column: {col}")
             if val in (None, ""):
                 continue
             param_name = f"filter_{col}"
-            conditions.append(f"`{col}` = @{param_name}")
+            conditions.append(f"{_quote_identifier(actual_col)} = @{param_name}")
             query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(val)))
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
     order_clause = ""
     if order_by:
-        if order_by not in valid_cols:
+        actual_order_by = _get_actual_col(valid_cols, order_by)
+        if actual_order_by is None:
             raise ValueError(f"Unknown column: {order_by}")
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
-        order_clause = f"ORDER BY `{order_by}` {direction}"
+        order_clause = f"ORDER BY {_quote_identifier(actual_order_by)} {direction}"
 
     sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
     job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
@@ -101,14 +117,15 @@ def get_table_data(dataset_id: str, table_id: str, limit: int = 100, offset: int
 def get_distinct_values(dataset_id: str, table_id: str, column: str, limit: int = 200):
     client = get_client()
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
-    if column not in valid_cols:
+    valid_cols = _build_cols_map(schema["fields"])
+    actual_col = _get_actual_col(valid_cols, column)
+    if actual_col is None:
         raise ValueError(f"Unknown column: {column}")
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     sql = f"""
-        SELECT DISTINCT `{column}` AS value
+        SELECT DISTINCT {_quote_identifier(actual_col)} AS value
         FROM {full_table}
-        WHERE `{column}` IS NOT NULL
+        WHERE {_quote_identifier(actual_col)} IS NOT NULL
         ORDER BY value
         LIMIT {limit}
     """
@@ -117,7 +134,7 @@ def get_distinct_values(dataset_id: str, table_id: str, column: str, limit: int 
 
 # Known filter fields and their column names in BigQuery
 FILTER_FIELDS = ["zone", "district_name", "crop", "season", "soil_type", "year"]
-def _build_filter_where(filters: dict | None, valid_cols: set):
+def _build_filter_where(filters: dict | None, valid_cols: dict):
     """Shared WHERE-clause builder used by filtered data, count, and summary queries."""
     if not filters:
         return "", []
@@ -125,10 +142,13 @@ def _build_filter_where(filters: dict | None, valid_cols: set):
     where_parts = []
     query_params = []
     for field, value in active.items():
-        if field not in valid_cols or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
+            continue
+        actual_field = _get_actual_col(valid_cols, field)
+        if actual_field is None:
             continue
         param_name = f"filter_{field}"
-        where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
+        where_parts.append(f"LOWER({_quote_identifier(actual_field)}) = LOWER(@{param_name})")
         query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(value)))
     where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     return where_clause, query_params
@@ -153,14 +173,15 @@ def get_table_data_filtered(
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
 
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
+    valid_cols = _build_cols_map(schema["fields"])
 
     order_clause = ""
     if order_by:
-        if order_by not in valid_cols:
+        actual_order_by = _get_actual_col(valid_cols, order_by)
+        if actual_order_by is None:
             raise ValueError(f"Unknown column: {order_by}")
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
-        order_clause = f"ORDER BY `{order_by}` {direction}"
+        order_clause = f"ORDER BY {_quote_identifier(actual_order_by)} {direction}"
 
     where_clause, query_params = _build_filter_where(filters, valid_cols)
     sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
@@ -172,7 +193,7 @@ def get_table_data_filtered(
 def get_filtered_count(dataset_id: str, table_id: str, filters: dict | None = None):
     client = get_client()
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
+    valid_cols = _build_cols_map(schema["fields"])
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     where_clause, query_params = _build_filter_where(filters, valid_cols)
     sql = f"SELECT COUNT(*) AS cnt FROM {full_table} {where_clause}"
@@ -180,21 +201,28 @@ def get_filtered_count(dataset_id: str, table_id: str, filters: dict | None = No
     result = list(client.query(sql, job_config=job_config).result())[0]
     return result.cnt
 
-def _fetch_distinct_for_field(client, full_table, field, applicable, max_values):
+def _fetch_distinct_for_field(client, full_table, field, applicable, max_values, col_lookup):
+    field_actual = _get_actual_col(col_lookup, field)
+    if field_actual is None:
+        return field, []
+
     where_parts = []
     query_params = []
     for parent_field, parent_value in applicable.items():
         if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", parent_field):
             continue
+        parent_actual = _get_actual_col(col_lookup, parent_field)
+        if parent_actual is None:
+            continue
         param_name = f"parent_{parent_field}"
-        where_parts.append(f"LOWER(`{parent_field}`) = LOWER(@{param_name})")
+        where_parts.append(f"LOWER({_quote_identifier(parent_actual)}) = LOWER(@{param_name})")
         query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(parent_value)))
 
-    base_condition = f"`{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''"
+    base_condition = f"{_quote_identifier(field_actual)} IS NOT NULL AND TRIM(CAST({_quote_identifier(field_actual)} AS STRING)) != ''"
     where_clause = "WHERE " + " AND ".join(where_parts + [base_condition]) if where_parts else f"WHERE {base_condition}"
 
     sql = f"""
-        SELECT DISTINCT CAST(`{field}` AS STRING) AS value
+        SELECT DISTINCT CAST({_quote_identifier(field_actual)} AS STRING) AS value
         FROM {full_table}
         {where_clause}
         ORDER BY value
@@ -223,16 +251,18 @@ def get_filter_options(
     """
     client = get_client()
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    schema = get_schema(dataset_id, table_id)
 
     safe_fields = [f for f in fields if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", f)]
     active_parents = {k: v for k, v in parent_filters.items() if v and str(v).strip()}
 
     result = {}
+    col_lookup = _build_cols_map(schema["fields"])
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = []
         for field in safe_fields:
             applicable = {k: v for k, v in active_parents.items() if k != field}
-            futures.append(executor.submit(_fetch_distinct_for_field, client, full_table, field, applicable, max_values))
+            futures.append(executor.submit(_fetch_distinct_for_field, client, full_table, field, applicable, max_values, col_lookup))
         for future in as_completed(futures):
             field, values = future.result()
             result[field] = values
@@ -324,7 +354,7 @@ def _summarize_column(client, full_table, field, where_clause, query_params):
 def get_column_summary(dataset_id: str, table_id: str, filters: dict | None = None, sample_rows: int = 50000):
     client = get_client()
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
+    valid_cols = _build_cols_map(schema["fields"])
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     where_clause, query_params = _build_filter_where(filters, valid_cols)
     fields = schema["fields"]
@@ -373,7 +403,7 @@ def get_dashboard_charts(dataset_id: str, table_id: str, filters: dict | None = 
     """Executes specific analytical queries for the 6 custom dashboard charts."""
     client = get_client()
     schema = get_schema(dataset_id, table_id)
-    valid_cols = {f["name"] for f in schema["fields"]}
+    valid_cols = _build_cols_map(schema["fields"])
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
     where_clause, query_params = _build_filter_where(filters, valid_cols)
     job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
