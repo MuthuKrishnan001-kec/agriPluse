@@ -219,3 +219,19 @@ def chat_endpoint(body: ChatBody):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    @app.get("/api/datasets/{dataset_id}/tables/{table_id}/summary")
+def table_summary(dataset_id: str, table_id: str, filters: str | None = None):
+    try:
+        parsed_filters = json.loads(filters) if filters else None
+        return {"columns": bq.get_column_summary(dataset_id, table_id, parsed_filters)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/datasets/{dataset_id}/tables/{table_id}/count")
+def table_count(dataset_id: str, table_id: str, filters: str | None = None):
+    try:
+        parsed_filters = json.loads(filters) if filters else None
+        return {"count": bq.get_filtered_count(dataset_id, table_id, parsed_filters)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

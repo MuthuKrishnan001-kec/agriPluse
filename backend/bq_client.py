@@ -117,6 +117,21 @@ def get_distinct_values(dataset_id: str, table_id: str, column: str, limit: int 
 
 # Known filter fields and their column names in BigQuery
 FILTER_FIELDS = ["zone", "district_name", "crop", "season", "soil_type", "year"]
+def _build_filter_where(filters: dict | None, valid_cols: set):
+    """Shared WHERE-clause builder used by filtered data, count, and summary queries."""
+    if not filters:
+        return "", []
+    active = {k: v for k, v in filters.items() if v and str(v).strip()}
+    where_parts = []
+    query_params = []
+    for field, value in active.items():
+        if field not in valid_cols or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
+            continue
+        param_name = f"filter_{field}"
+        where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
+        query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(value)))
+    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    return where_clause, query_params
 
 
 def get_table_data_filtered(
@@ -146,12 +161,7 @@ def get_table_data_filtered(
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
         order_clause = f"ORDER BY `{order_by}` {direction}"
 
-    active = {k: v for k, v in filters.items() if v and str(v).strip()}
-    where_parts = []
-    query_params = []
-    for field, value in active.items():
-        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
-            continue
+    where_clause, query_params = _build_filter_where(filters, valid_cols)
         param_name = f"filter_{field}"
         where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
         query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(value)))
@@ -163,6 +173,16 @@ def get_table_data_filtered(
     rows = client.query(sql, job_config=job_config).result()
     return [dict(row) for row in rows]
 
+def get_filtered_count(dataset_id: str, table_id: str, filters: dict | None = None):
+    client = get_client()
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    where_clause, query_params = _build_filter_where(filters, valid_cols)
+    sql = f"SELECT COUNT(*) AS cnt FROM {full_table} {where_clause}"
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
+    result = list(client.query(sql, job_config=job_config).result())[0]
+    return result.cnt
 
 def _fetch_distinct_for_field(client, full_table, field, applicable, max_values):
     where_parts = []
@@ -223,24 +243,24 @@ def get_filter_options(
 
     return result
 
-
-def _summarize_column(client, full_table, field):
+def _summarize_column(client, full_table, field, where_clause, query_params):
     name, ftype = field["name"], field["type"]
     col = f"`{name}`"
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params) if query_params else None
     try:
         if "year" in name.lower():
             sql = f"""
                 SELECT {col} AS year, COUNT(*) AS count
                 FROM {full_table}
-                WHERE {col} IS NOT NULL
+                {where_clause}
+                {"AND" if where_clause else "WHERE"} {col} IS NOT NULL
                 GROUP BY year ORDER BY year
             """
             trend = []
-            for r in client.query(sql).result():
+            for r in client.query(sql, job_config=job_config).result():
                 if r.year is not None:
                     try:
-                        val = int(r.year)
-                        trend.append({"year": val, "count": r.count})
+                        trend.append({"year": int(r.year), "count": r.count})
                     except (ValueError, TypeError):
                         trend.append({"year": str(r.year), "count": r.count})
             return {"name": name, "type": "year", "trend": trend}
@@ -250,20 +270,23 @@ def _summarize_column(client, full_table, field):
                 SELECT MIN({col}) AS min_v, MAX({col}) AS max_v,
                        AVG({col}) AS avg_v, COUNT({col}) AS non_null
                 FROM {full_table}
+                {where_clause}
             """
-            stats = list(client.query(sql).result())[0]
+            stats = list(client.query(sql, job_config=job_config).result())[0]
             histogram = []
             if stats.min_v is not None and stats.max_v is not None and stats.min_v != stats.max_v:
+                null_guard = "AND" if where_clause else "WHERE"
                 bucket_sql = f"""
                     SELECT CAST(FLOOR(({col} - {stats.min_v}) /
                           (({stats.max_v} - {stats.min_v}) / 10.0)) AS INT64) AS bucket,
                           COUNT(*) AS count
                     FROM {full_table}
-                    WHERE {col} IS NOT NULL
+                    {where_clause}
+                    {null_guard} {col} IS NOT NULL
                     GROUP BY bucket ORDER BY bucket
                 """
                 histogram = [{"bucket": r.bucket, "count": r.count}
-                             for r in client.query(bucket_sql).result()]
+                             for r in client.query(bucket_sql, job_config=job_config).result()]
             return {
                 "name": name, "type": "numeric",
                 "min": stats.min_v, "max": stats.max_v, "avg": stats.avg_v,
@@ -271,25 +294,29 @@ def _summarize_column(client, full_table, field):
             }
 
         elif ftype in ("STRING", "BOOL", "BOOLEAN"):
+            null_guard = "AND" if where_clause else "WHERE"
             sql = f"""
                 SELECT {col} AS value, COUNT(*) AS count
                 FROM {full_table}
-                WHERE {col} IS NOT NULL
+                {where_clause}
+                {null_guard} {col} IS NOT NULL
                 GROUP BY value ORDER BY count DESC LIMIT 10
             """
             top_values = [{"value": str(r.value), "count": r.count}
-                          for r in client.query(sql).result()]
+                          for r in client.query(sql, job_config=job_config).result()]
             return {"name": name, "type": "categorical", "top_values": top_values}
 
         elif ftype in ("DATE", "DATETIME", "TIMESTAMP"):
+            null_guard = "AND" if where_clause else "WHERE"
             sql = f"""
                 SELECT DATE_TRUNC(DATE({col}), MONTH) AS period, COUNT(*) AS count
                 FROM {full_table}
-                WHERE {col} IS NOT NULL
+                {where_clause}
+                {null_guard} {col} IS NOT NULL
                 GROUP BY period ORDER BY period
             """
             trend = [{"period": str(r.period), "count": r.count}
-                     for r in client.query(sql).result()]
+                     for r in client.query(sql, job_config=job_config).result()]
             return {"name": name, "type": "temporal", "trend": trend}
 
         else:
@@ -297,6 +324,26 @@ def _summarize_column(client, full_table, field):
     except Exception as e:
         return {"name": name, "type": ftype, "error": str(e)}
 
+
+def get_column_summary(dataset_id: str, table_id: str, filters: dict | None = None, sample_rows: int = 50000):
+    client = get_client()
+    schema = get_schema(dataset_id, table_id)
+    valid_cols = {f["name"] for f in schema["fields"]}
+    full_table = f"`{client.project}.{dataset_id}.{table_id}`"
+    where_clause, query_params = _build_filter_where(filters, valid_cols)
+    fields = schema["fields"]
+
+    summaries = [None] * len(fields)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_idx = {
+            executor.submit(_summarize_column, client, full_table, field, where_clause, query_params): idx
+            for idx, field in enumerate(fields)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            summaries[idx] = future.result()
+
+    return summaries
 
 def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000):
     """Builds chart-ready summaries for every column:
