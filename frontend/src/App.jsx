@@ -208,17 +208,22 @@ export default function App() {
   const loadTable = useCallback(async (ds, tbl, pageArg, obArg, odArg, activeFilters) => {
     setRunning(true); setError(null)
     try {
+      const schemaPromise = typeof api.getSchema === 'function'
+        ? api.getSchema(ds, tbl)
+        : Promise.resolve(null)
+
       const [sr, smr, dr, cr] = await Promise.all([
-        api.getSchema(ds, tbl),
+        schemaPromise,
         api.getSummary(ds, tbl, activeFilters),
         api.getData(ds, tbl, { limit: PAGE_SIZE, offset: pageArg * PAGE_SIZE, orderBy: obArg, orderDir: odArg, filters: activeFilters }),
         api.getDashboardCharts(ds, tbl, activeFilters)
       ])
-      setSchema(sr)
-      setSummary(smr.columns || [])
-      setRows(dr.rows || [])
+
+      setSchema(sr && typeof sr === 'object' ? sr : null)
+      setSummary(smr?.columns || [])
+      setRows(dr?.rows || [])
       setDashboardCharts(cr || {})
-    } catch (e) { setError({ scope: 'table', message: friendlyError(e.message) }) }
+    } catch (e) { setError({ scope: 'table', message: friendlyError(e?.message) }) }
     finally { setRunning(false) }
   }, [])
 
