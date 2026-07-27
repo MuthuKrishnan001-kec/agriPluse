@@ -3,6 +3,7 @@ import re
 import json
 from google.cloud import bigquery
 from google.oauth2 import service_account
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 MAX_ROWS = int(os.environ.get("MAX_ROWS", "5000"))
@@ -21,6 +22,7 @@ def get_client() -> bigquery.Client:
         else:
             _client = bigquery.Client(project=PROJECT_ID)
     return _client
+
 
 def _assert_select_only(sql: str) -> None:
     """Very small guard so the /query endpoint can't be used to mutate data.
@@ -111,6 +113,8 @@ def get_distinct_values(dataset_id: str, table_id: str, column: str, limit: int 
         LIMIT {limit}
     """
     return [str(r.value) for r in client.query(sql).result()]
+
+
 # Known filter fields and their column names in BigQuery
 FILTER_FIELDS = ["zone", "district_name", "crop", "season", "soil_type", "year"]
 
@@ -129,13 +133,10 @@ def get_table_data_filtered(
     Each filter uses LOWER(col) = LOWER(@param) for case-insensitive matching
     so the frontend values don't need to match the exact case stored in BigQuery.
     """
-    from google.cloud import bigquery as _bq
-
     client = get_client()
     limit = min(limit, MAX_ROWS)
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
 
-    # Validate optional order_by column
     order_clause = ""
     if order_by:
         schema = get_schema(dataset_id, table_id)
@@ -145,24 +146,50 @@ def get_table_data_filtered(
         direction = "DESC" if order_dir.upper() == "DESC" else "ASC"
         order_clause = f"ORDER BY `{order_by}` {direction}"
 
-    # Build WHERE clause from active filters only
     active = {k: v for k, v in filters.items() if v and str(v).strip()}
     where_parts = []
     query_params = []
     for field, value in active.items():
-        # Guard against injection by only allowing known field names
         if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field):
             continue
         param_name = f"filter_{field}"
         where_parts.append(f"LOWER(`{field}`) = LOWER(@{param_name})")
-        query_params.append(_bq.ScalarQueryParameter(param_name, "STRING", str(value)))
+        query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(value)))
 
     where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     sql = f"SELECT * FROM {full_table} {where_clause} {order_clause} LIMIT {limit} OFFSET {offset}"
 
-    job_config = _bq.QueryJobConfig(query_parameters=query_params)
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
     rows = client.query(sql, job_config=job_config).result()
     return [dict(row) for row in rows]
+
+
+def _fetch_distinct_for_field(client, full_table, field, applicable, max_values):
+    where_parts = []
+    query_params = []
+    for parent_field, parent_value in applicable.items():
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", parent_field):
+            continue
+        param_name = f"parent_{parent_field}"
+        where_parts.append(f"LOWER(`{parent_field}`) = LOWER(@{param_name})")
+        query_params.append(bigquery.ScalarQueryParameter(param_name, "STRING", str(parent_value)))
+
+    base_condition = f"`{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''"
+    where_clause = "WHERE " + " AND ".join(where_parts + [base_condition]) if where_parts else f"WHERE {base_condition}"
+
+    sql = f"""
+        SELECT DISTINCT CAST(`{field}` AS STRING) AS value
+        FROM {full_table}
+        {where_clause}
+        ORDER BY value
+        LIMIT {max_values}
+    """
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    try:
+        rows = client.query(sql, job_config=job_config).result()
+        return field, [row.value for row in rows if row.value]
+    except Exception:
+        return field, []
 
 
 def get_filter_options(
@@ -173,57 +200,102 @@ def get_filter_options(
     max_values: int = 2000,
 ):
     """Return distinct values for each requested field, filtered by any already-set
-    parent selections (e.g. zone filters the district_name options).
+    parent selections (e.g. zone filters the district_name options). Runs one
+    query per field concurrently instead of sequentially.
 
-    Uses named BigQuery parameters for safe SQL construction.
     Returns: { field_name: [value, ...] }
     """
-    from google.cloud import bigquery as _bq
-
     client = get_client()
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
 
-    # Validate field names — only allow identifier-safe names
     safe_fields = [f for f in fields if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", f)]
-
-    # Build parent WHERE clause from already-selected filters
     active_parents = {k: v for k, v in parent_filters.items() if v and str(v).strip()}
 
     result = {}
-    for field in safe_fields:
-        # Only apply parent filters that are *not* the field itself to avoid
-        # self-filtering (e.g. when fetching zone options, don't filter by zone)
-        applicable = {k: v for k, v in active_parents.items() if k != field}
-
-        where_parts = []
-        query_params = []
-        for parent_field, parent_value in applicable.items():
-            if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", parent_field):
-                continue
-            param_name = f"parent_{parent_field}"
-            where_parts.append(f"LOWER(`{parent_field}`) = LOWER(@{param_name})")
-            query_params.append(
-                _bq.ScalarQueryParameter(param_name, "STRING", str(parent_value))
-            )
-
-        where_clause = f"WHERE {' AND '.join(where_parts)} AND `{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''" if where_parts else f"WHERE `{field}` IS NOT NULL AND TRIM(CAST(`{field}` AS STRING)) != ''"
-
-        sql = f"""
-            SELECT DISTINCT CAST(`{field}` AS STRING) AS value
-            FROM {full_table}
-            {where_clause}
-            ORDER BY value
-            LIMIT {max_values}
-        """
-
-        job_config = _bq.QueryJobConfig(query_parameters=query_params)
-        try:
-            rows = client.query(sql, job_config=job_config).result()
-            result[field] = [row.value for row in rows if row.value]
-        except Exception as e:
-            result[field] = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for field in safe_fields:
+            applicable = {k: v for k, v in active_parents.items() if k != field}
+            futures.append(executor.submit(_fetch_distinct_for_field, client, full_table, field, applicable, max_values))
+        for future in as_completed(futures):
+            field, values = future.result()
+            result[field] = values
 
     return result
+
+
+def _summarize_column(client, full_table, field):
+    name, ftype = field["name"], field["type"]
+    col = f"`{name}`"
+    try:
+        if "year" in name.lower():
+            sql = f"""
+                SELECT {col} AS year, COUNT(*) AS count
+                FROM {full_table}
+                WHERE {col} IS NOT NULL
+                GROUP BY year ORDER BY year
+            """
+            trend = []
+            for r in client.query(sql).result():
+                if r.year is not None:
+                    try:
+                        val = int(r.year)
+                        trend.append({"year": val, "count": r.count})
+                    except (ValueError, TypeError):
+                        trend.append({"year": str(r.year), "count": r.count})
+            return {"name": name, "type": "year", "trend": trend}
+
+        elif ftype in ("INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"):
+            sql = f"""
+                SELECT MIN({col}) AS min_v, MAX({col}) AS max_v,
+                       AVG({col}) AS avg_v, COUNT({col}) AS non_null
+                FROM {full_table}
+            """
+            stats = list(client.query(sql).result())[0]
+            histogram = []
+            if stats.min_v is not None and stats.max_v is not None and stats.min_v != stats.max_v:
+                bucket_sql = f"""
+                    SELECT CAST(FLOOR(({col} - {stats.min_v}) /
+                          (({stats.max_v} - {stats.min_v}) / 10.0)) AS INT64) AS bucket,
+                          COUNT(*) AS count
+                    FROM {full_table}
+                    WHERE {col} IS NOT NULL
+                    GROUP BY bucket ORDER BY bucket
+                """
+                histogram = [{"bucket": r.bucket, "count": r.count}
+                             for r in client.query(bucket_sql).result()]
+            return {
+                "name": name, "type": "numeric",
+                "min": stats.min_v, "max": stats.max_v, "avg": stats.avg_v,
+                "non_null": stats.non_null, "histogram": histogram,
+            }
+
+        elif ftype in ("STRING", "BOOL", "BOOLEAN"):
+            sql = f"""
+                SELECT {col} AS value, COUNT(*) AS count
+                FROM {full_table}
+                WHERE {col} IS NOT NULL
+                GROUP BY value ORDER BY count DESC LIMIT 10
+            """
+            top_values = [{"value": str(r.value), "count": r.count}
+                          for r in client.query(sql).result()]
+            return {"name": name, "type": "categorical", "top_values": top_values}
+
+        elif ftype in ("DATE", "DATETIME", "TIMESTAMP"):
+            sql = f"""
+                SELECT DATE_TRUNC(DATE({col}), MONTH) AS period, COUNT(*) AS count
+                FROM {full_table}
+                WHERE {col} IS NOT NULL
+                GROUP BY period ORDER BY period
+            """
+            trend = [{"period": str(r.period), "count": r.count}
+                     for r in client.query(sql).result()]
+            return {"name": name, "type": "temporal", "trend": trend}
+
+        else:
+            return {"name": name, "type": "other"}
+    except Exception as e:
+        return {"name": name, "type": ftype, "error": str(e)}
 
 
 def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000):
@@ -231,82 +303,23 @@ def get_column_summary(dataset_id: str, table_id: str, sample_rows: int = 50000)
     - numeric columns: min/max/avg + a 10-bucket histogram
     - string/bool columns: top 10 value counts
     - date/timestamp columns: row count trend bucketed by day/month
-    Runs a handful of aggregate queries server-side so the frontend never
-    has to pull raw rows to draw charts.
+    Runs one query set per column concurrently instead of sequentially —
+    this is the main speed win for wide tables.
     """
     client = get_client()
     schema = get_schema(dataset_id, table_id)
     full_table = f"`{client.project}.{dataset_id}.{table_id}`"
-    summaries = []
+    fields = schema["fields"]
 
-    for field in schema["fields"]:
-        name, ftype = field["name"], field["type"]
-        col = f"`{name}`"
-        try:
-            if "year" in name.lower():
-                sql = f"""
-                    SELECT {col} AS year, COUNT(*) AS count
-                    FROM {full_table}
-                    WHERE {col} IS NOT NULL
-                    GROUP BY year ORDER BY year
-                """
-                trend = []
-                for r in client.query(sql).result():
-                    if r.year is not None:
-                        try:
-                            val = int(r.year)
-                            trend.append({"year": val, "count": r.count})
-                        except (ValueError, TypeError):
-                            trend.append({"year": str(r.year), "count": r.count})
-                summaries.append({"name": name, "type": "year", "trend": trend})
-            elif ftype in ("INTEGER", "INT64", "FLOAT", "FLOAT64", "NUMERIC", "BIGNUMERIC"):
-                sql = f"""
-                    SELECT MIN({col}) AS min_v, MAX({col}) AS max_v,
-                           AVG({col}) AS avg_v, COUNT({col}) AS non_null
-                    FROM {full_table}
-                """
-                stats = list(client.query(sql).result())[0]
-                histogram = []
-                if stats.min_v is not None and stats.max_v is not None and stats.min_v != stats.max_v:
-                    bucket_sql = f"""
-                        SELECT CAST(FLOOR(({col} - {stats.min_v}) /
-                              (({stats.max_v} - {stats.min_v}) / 10.0)) AS INT64) AS bucket,
-                              COUNT(*) AS count
-                        FROM {full_table}
-                        WHERE {col} IS NOT NULL
-                        GROUP BY bucket ORDER BY bucket
-                    """
-                    histogram = [{"bucket": r.bucket, "count": r.count}
-                                 for r in client.query(bucket_sql).result()]
-                summaries.append({
-                    "name": name, "type": "numeric",
-                    "min": stats.min_v, "max": stats.max_v, "avg": stats.avg_v,
-                    "non_null": stats.non_null, "histogram": histogram,
-                })
-            elif ftype in ("STRING", "BOOL", "BOOLEAN"):
-                sql = f"""
-                    SELECT {col} AS value, COUNT(*) AS count
-                    FROM {full_table}
-                    WHERE {col} IS NOT NULL
-                    GROUP BY value ORDER BY count DESC LIMIT 10
-                """
-                top_values = [{"value": str(r.value), "count": r.count}
-                              for r in client.query(sql).result()]
-                summaries.append({"name": name, "type": "categorical", "top_values": top_values})
-            elif ftype in ("DATE", "DATETIME", "TIMESTAMP"):
-                sql = f"""
-                    SELECT DATE_TRUNC(DATE({col}), MONTH) AS period, COUNT(*) AS count
-                    FROM {full_table}
-                    WHERE {col} IS NOT NULL
-                    GROUP BY period ORDER BY period
-                """
-                trend = [{"period": str(r.period), "count": r.count}
-                         for r in client.query(sql).result()]
-                summaries.append({"name": name, "type": "temporal", "trend": trend})
-            else:
-                summaries.append({"name": name, "type": "other"})
-        except Exception as e:
-            summaries.append({"name": name, "type": ftype, "error": str(e)})
+    summaries = [None] * len(fields)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_idx = {
+            executor.submit(_summarize_column, client, full_table, field): idx
+            for idx, field in enumerate(fields)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            summaries[idx] = future.result()
 
     return summaries
 

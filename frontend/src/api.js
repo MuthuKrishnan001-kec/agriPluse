@@ -51,5 +51,11 @@ export const api = {
 
   runQuery: (sql, maxRows = 500) =>
     request('/api/query', { method: 'POST', body: JSON.stringify({ sql, max_rows: maxRows }) }),
+  // New: Get insights (farm advice)
+  getInsights: (dataset, table, filters) =>
+    request('/api/insights', { method: 'POST', body: JSON.stringify({ dataset, table, filters }) }),
+  // New: Send chat messages
+  sendChat: (messages, dataset, table) =>
+    request('/api/chat', { method: 'POST', body: JSON.stringify({ messages, dataset, table }) }),
 }
 
