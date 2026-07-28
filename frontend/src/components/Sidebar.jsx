@@ -13,7 +13,7 @@ export default function Sidebar({ activeView, onNavigate }) {
 
         <div className="mt-6 rounded-xl border border-furrow bg-soil p-3.5 text-sm text-slate-300 shadow-inner">
           <div className="font-semibold text-white">Your records</div>
-          <p className="mt-1 leading-relaxed text-slate-400">Choose a set of farm data to view live trends and field details.</p>
+          <p className="mt-1 leading-relaxed text-slate-400">Explore live trends from the active farm dataset.</p>
         </div>
 
         <div className="mt-6">

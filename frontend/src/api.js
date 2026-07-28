@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+const configuredBase = (import.meta.env.VITE_API_BASE || '').trim()
+const API_BASE = configuredBase && !configuredBase.includes('agripluse.onrender.com')
+  ? configuredBase.replace(/\/$/, '')
+  : 'http://localhost:8000'
 
 function buildFilterQuery(filters = {}) {
   if (!filters || Object.keys(filters).length === 0) return ''

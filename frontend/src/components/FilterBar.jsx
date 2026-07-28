@@ -32,7 +32,7 @@ export default function FilterBar({
   if (!filterFields || filterFields.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-border/60 bg-white/50 p-8 text-center text-sm text-slate-500 shadow-sm backdrop-blur-sm">
-        Select a dataset and table from the sidebar to view and apply filters.
+        The live table is loading filter options. You can still inspect the dashboard data below while the backend finishes preparing the controls.
       </div>
     );
   }

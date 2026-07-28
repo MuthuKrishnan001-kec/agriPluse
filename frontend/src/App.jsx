@@ -11,7 +11,7 @@ import ChatWidget from './components/ChatWidget'
 import TableCardsToggle from './components/TableCardsToggle'
 import FilterBar from './components/FilterBar'
 import PlainSummary from './components/PlainSummary'
-// Placeholder view components (to be expanded later)
+import OverviewView from './components/views/OverviewView'
 import CropAnalyticsView from './components/views/CropAnalyticsView'
 import RegionalInsightsView from './components/views/RegionalInsightsView'
 import SoilHealthView from './components/views/SoilHealthView'
@@ -95,13 +95,31 @@ function filterLabel(fields, filters) {
 }
 
 function getCropName(row) {
-  return String(row?.crop ?? row?.Crop ?? row?.crop_name ?? row?.Crop_Name ?? '').trim() || null;
+  if (!row || typeof row !== 'object') return null;
+  const candidates = Object.entries(row).filter(([key, value]) => /crop/i.test(key) && value != null && String(value).trim() !== '');
+  if (candidates.length > 0) return String(candidates[0][1]).trim();
+  return null;
 }
 
 function getAreaValue(row) {
-  const raw = row?.Area ?? row?.area ?? row?.area_ha ?? row?.Area_ha;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
+  if (!row || typeof row !== 'object') return null;
+  const preferredKeys = [/^area$/i, /^area[_ ]?ha$/i, /area/i, /hectare/i, /acre/i];
+  for (const pattern of preferredKeys) {
+    for (const [key, raw] of Object.entries(row)) {
+      if (pattern.test(key)) {
+        const value = Number(raw);
+        if (Number.isFinite(value)) return value;
+      }
+    }
+  }
+  // fallback: any numeric-looking value in an area-like field name
+  for (const [key, raw] of Object.entries(row)) {
+    if (/area/i.test(key)) {
+      const value = Number(raw);
+      if (Number.isFinite(value)) return value;
+    }
+  }
+  return null;
 }
 
 function buildPlainSummary({ cols, rows, schema, fields, filters }) {
@@ -210,10 +228,8 @@ function buildPlainSummary({ cols, rows, schema, fields, filters }) {
 
 export default function App() {
   // Core data state
-  const [datasets, setDatasets] = useState([])
-  const [tables, setTables] = useState([])
-  const [selectedDataset, setSelectedDataset] = useState('')
-  const [selectedTable, setSelectedTable] = useState('')
+  const selectedDataset = 'agri_dataset'
+  const selectedTable = 'agri_dataset'
   const [schema, setSchema] = useState(null)
   const [summary, setSummary] = useState(null)
   const [dashboardCharts, setDashboardCharts] = useState(null)
@@ -233,29 +249,6 @@ export default function App() {
   const [activeView, setActiveView] = useState('overview')
 
   const debounceRef = useRef(null)
-
-  // Load list of datasets on mount
-  useEffect(() => {
-    api.listDatasets().then(res => {
-      const dsList = res.datasets || [];
-      setDatasets(dsList);
-      if (dsList.length > 0 && !selectedDataset) {
-        setSelectedDataset(dsList[0]);
-      }
-    }).catch(() => {/* ignore */})
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load tables when a dataset is chosen
-  useEffect(() => {
-    if (!selectedDataset) return
-    api.listTables(selectedDataset).then(res => {
-      const tblList = res.tables || [];
-      setTables(tblList);
-      if (tblList.length > 0) {
-        setSelectedTable(tblList[0]);
-      }
-    }).catch(() => setTables([]))
-  }, [selectedDataset])
 
   // Load schema/summary/rows when dataset+table changes or pagination/sort/filters change
   const loadTable = useCallback(async (ds, tbl, pageArg, obArg, odArg, activeFilters) => {
@@ -373,20 +366,30 @@ export default function App() {
     }, 500)
   }, [selectedDataset, selectedTable, filters])
 
+  const viewTitleMap = {
+    overview: 'Platform Overview',
+    crop: 'Crop & Yield Analytics',
+    regional: 'Regional Insights',
+    soil: 'Soil & Input Health',
+    climate: 'Seasonal & Climate Trends',
+    advice: 'Farm Advice & AI Logs',
+    details: 'Platform Overview',
+  }
+
   // Render
   return (
     <AppLayout
       activeView={activeView}
       onNavigate={setActiveView}
     >
-      <header className="mb-6 rounded-2xl bg-white p-6 shadow-sm border border-border">
+      <header className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <h1 className="font-display text-3xl font-bold tracking-tight text-earth">Platform Overview</h1>
+              <h1 className="font-display text-3xl font-bold tracking-tight text-slate-900">{viewTitleMap[activeView] || 'AgriPulse'}</h1>
               {selectedDataset && selectedTable && (
-                <span className="inline-flex items-center rounded-full bg-crop/10 px-2.5 py-0.5 text-xs font-semibold text-crop border border-crop/20">
-                  <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-crop animate-pulse"></span>
+                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                  <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                   Live Data
                 </span>
               )}
@@ -412,7 +415,7 @@ export default function App() {
 
       {activeView === 'overview' ? (
         <>
-          {selectedDataset && selectedTable && schema && (
+          {(selectedDataset && selectedTable) && (
             <div className="mb-6">
               <KpiCards schema={schema} loadedRows={rows?.length} matchingRows={filteredRows?.length} activeFilters={activeFilterCount} />
             </div>
@@ -430,15 +433,8 @@ export default function App() {
           />
 
           <InsightBar insight={insight} onGetAdvice={() => setShowAdvice(true)} />
-
-          <div className="mt-8 flex justify-center">
-            <button
-              onClick={() => setActiveView('details')}
-              disabled={!selectedDataset || !selectedTable}
-              className="rounded-xl bg-crop px-8 py-3.5 text-lg font-bold text-white shadow-md shadow-crop/20 hover:bg-moss hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all duration-200"
-            >
-              Get Details
-            </button>
+          <div className="mt-6">
+            <OverviewView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />
           </div>
         </>
       ) : (
@@ -451,21 +447,21 @@ export default function App() {
               ← Back to Overview
             </button>
           </div>
+          <FilterBar
+            filters={filters}
+            filterFields={filterFields}
+            filterOptions={filterOptions}
+            loadingFilterOptions={loadingFilterOptions}
+            running={running}
+            onFilterChange={handleFilterChange}
+            onClearFilters={clearFilters}
+            onRefresh={refreshCurrentView}
+          />
           {(() => {
             switch (activeView) {
               case 'details':
                 return (
                   <>
-                    <FilterBar
-                      filters={filters}
-                      filterFields={filterFields}
-                      filterOptions={filterOptions}
-                      loadingFilterOptions={loadingFilterOptions}
-                      running={running}
-                      onFilterChange={handleFilterChange}
-                      onClearFilters={clearFilters}
-                      onRefresh={refreshCurrentView}
-                    />
                     <PlainSummary summary={plainSummary} />
                     {running && (
                       <div className="my-6 flex items-center gap-3 text-sm text-slate-400">
@@ -473,7 +469,7 @@ export default function App() {
                         Loading data…
                       </div>
                     )}
-                    {!running && dashboardCharts && (
+                    {!running && (
                       <div className="mt-6">
                         <ChartGrid charts={dashboardCharts} activeFilters={activeFilterCount} />
                       </div>
@@ -500,15 +496,15 @@ export default function App() {
                   </>
                 );
               case 'crop':
-                return <CropAnalyticsView />;
+                return <CropAnalyticsView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />;
               case 'regional':
-                return <RegionalInsightsView />;
+                return <RegionalInsightsView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />;
               case 'soil':
-                return <SoilHealthView />;
+                return <SoilHealthView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />;
               case 'climate':
-                return <ClimateTrendsView />;
+                return <ClimateTrendsView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />;
               case 'advice':
-                return <FarmAdviceView />;
+                return <FarmAdviceView rows={activeFilterCount > 0 ? filteredRows : (rows || [])} filters={filters} />;
               default:
                 return null;
             }
