@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path)
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -225,6 +226,9 @@ def insights(body: InsightsBody):
 @app.post("/api/chat")
 def chat_endpoint(body: ChatBody):
     try:
+        if not body.messages:
+            raise ValueError("Chat messages are required.")
+
         context = None
         if body.dataset and body.table:
             schema_info = bq.get_schema(body.dataset, body.table)
