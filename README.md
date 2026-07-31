@@ -45,7 +45,7 @@ Edit `.env`:
 ```
 GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 GCP_PROJECT_ID=your-project-id
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173,https://agri-pluse.vercel.app
 MAX_ROWS=5000
 ```
 
@@ -85,7 +85,9 @@ Any host that runs a Python ASGI app + a static frontend works, e.g.:
 
 - **Backend:** Cloud Run, Render, Railway, Fly.io. Set `GOOGLE_APPLICATION_CREDENTIALS`
   via the platform's secret manager (don't ship the JSON key in the container
-  image) and set `ALLOWED_ORIGINS` to your deployed frontend's URL.
+  image) and set `ALLOWED_ORIGINS` to your deployed frontend's URL. For this
+  Vercel deployment, use `https://agri-pluse.vercel.app` (without a trailing
+  slash), then redeploy the backend.
 - **Frontend:** `npm run build` produces `frontend/dist/` — deploy as a
   static site (Vercel, Netlify, Cloud Storage + CDN, etc.) and point
   `VITE_API_BASE` at your deployed backend URL.

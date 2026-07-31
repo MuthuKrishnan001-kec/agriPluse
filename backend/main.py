@@ -37,10 +37,10 @@ for origin in default_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    # Vite selects the next available port when 5173 is occupied.  Permit
-    # local development origins on that port too, while production origins
-    # remain restricted to ALLOWED_ORIGINS/default_origins above.
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    # Vite may select any available local port. Vercel preview URLs change
+    # per deployment, so allow that controlled domain family as well. The
+    # production URL still belongs in ALLOWED_ORIGINS on Render.
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://[a-z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
