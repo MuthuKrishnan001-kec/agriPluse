@@ -60,7 +60,7 @@ Check `http://localhost:8000/api/health` → `{"status": "ok"}`.
 ```bash
 cd frontend
 npm install
-cp .env.example .env       # VITE_API_BASE=http://localhost:8000
+cp .env.example .env       # VITE_API_BASE=http://127.0.0.1:8000
 npm run dev
 ```
 Open `http://localhost:5173`.

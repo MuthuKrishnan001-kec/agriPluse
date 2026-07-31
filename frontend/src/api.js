@@ -1,5 +1,8 @@
 const configuredBase = (import.meta.env.VITE_API_BASE || '').trim()
-const API_BASE = configuredBase.replace(/\/$/, '') || 'http://localhost:8000'
+// Uvicorn is started on IPv4 in the local setup.  Using the explicit IPv4
+// loopback address prevents browsers that resolve `localhost` to ::1 first
+// from treating the API as unreachable.
+const API_BASE = configuredBase.replace(/\/$/, '') || 'http://127.0.0.1:8000'
 
 function buildFilterQuery(filters = {}) {
   if (!filters || Object.keys(filters).length === 0) return ''
@@ -7,10 +10,16 @@ function buildFilterQuery(filters = {}) {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+  const url = `${API_BASE}${path}`
+  let res
+  try {
+    res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    })
+  } catch (error) {
+    throw new Error(`Could not reach the data service at ${API_BASE}. Start the backend and confirm VITE_API_BASE is correct.`)
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail || `Request failed: ${res.status}`)
@@ -66,4 +75,3 @@ export const api = {
   sendChat: (messages, dataset, table) =>
     request('/api/chat', { method: 'POST', body: JSON.stringify({ messages, dataset, table }) }),
 }
-
