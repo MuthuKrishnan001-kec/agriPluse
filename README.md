@@ -47,6 +47,8 @@ GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
 GCP_PROJECT_ID=your-project-id
 ALLOWED_ORIGINS=http://localhost:5173,https://agri-pluse.vercel.app
 MAX_ROWS=5000
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
 Run it:

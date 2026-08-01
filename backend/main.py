@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import bq_client as bq
-from grok_client import get_insights, chat as grok_chat
+from gemini_client import get_insights, chat as gemini_chat
 
 app = FastAPI(title="BigQuery Dashboard API")
 
@@ -242,7 +242,7 @@ def chat_endpoint(body: ChatBody):
                 "columns": [f["name"] for f in schema_info["fields"]],
             }
         history = [m.dict() for m in body.messages]
-        reply = grok_chat(history, context)
+        reply = gemini_chat(history, context)
         return {"reply": reply}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
